@@ -178,9 +178,43 @@ public final class Parser {
                 String handler = expectIdentOrDesc("handler label");
                 m.catches.add(new com.jvmasm.ast.CatchEntry(type, from, to, handler));
             }
+            case ".stack" -> m.code.add(parseStackFrame(dir.line()));
             default -> throw error("unsupported method directive '" + dir.text() + "'");
         }
         expectEndOfLine();
+    }
+
+    /**
+     * {@code .stack at LABEL locals t1 t2 stack t3 t4}
+     * {@code locals}/{@code stack} sections may be empty.
+     */
+    private com.jvmasm.ast.StackFrameItem parseStackFrame(int line) {
+        expectIdentWord("at");
+        String label = expectIdentOrDesc("frame label");
+        expectIdentWord("locals");
+        List<String> locals = new ArrayList<>();
+        while (!check(TokenType.NEWLINE) && !check(TokenType.EOF)
+                && !(check(TokenType.IDENT) && peek().text().equals("stack"))) {
+            locals.add(expectVerificationType());
+        }
+        expectIdentWord("stack");
+        List<String> stack = new ArrayList<>();
+        while (!check(TokenType.NEWLINE) && !check(TokenType.EOF)) {
+            stack.add(expectVerificationType());
+        }
+        return new com.jvmasm.ast.StackFrameItem(label, List.copyOf(locals), List.copyOf(stack), line);
+    }
+
+    private String expectVerificationType() {
+        if (check(TokenType.IDENT) || check(TokenType.MNEMONIC)) {
+            String t = advance().text();
+            if (t.equals("uninitialized")) {
+                String lab = expectIdentOrDesc("uninitialized label");
+                return "uninitialized " + lab;
+            }
+            return t;
+        }
+        throw error("expected verification type, got " + peek());
     }
 
     private void expectIdentWord(String word) {

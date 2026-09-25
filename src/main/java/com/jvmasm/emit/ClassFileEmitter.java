@@ -9,6 +9,7 @@ import com.jvmasm.ast.LabelItem;
 import com.jvmasm.ast.LookupCase;
 import com.jvmasm.ast.LookupSwitchItem;
 import com.jvmasm.ast.MethodDecl;
+import com.jvmasm.ast.StackFrameItem;
 import com.jvmasm.ast.TableSwitchItem;
 import com.jvmasm.isa.InstructionDef;
 
@@ -17,6 +18,9 @@ import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
 import java.lang.classfile.Opcode;
 import java.lang.classfile.attribute.SourceFileAttribute;
+import java.lang.classfile.attribute.StackMapFrameInfo;
+import java.lang.classfile.attribute.StackMapTableAttribute;
+import java.lang.classfile.instruction.DiscontinuedInstruction;
 import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.LoadableConstantEntry;
 import java.lang.classfile.instruction.ArrayLoadInstruction;
@@ -66,7 +70,12 @@ public final class ClassFileEmitter {
         ClassDesc thisDesc = ClassDesc.ofInternalName(cls.thisClass);
         ClassDesc superDesc = ClassDesc.ofInternalName(cls.superClass);
 
-        byte[] bytes = ClassFile.of().build(thisDesc, classBuilder -> {
+        boolean manualStacks = cls.methods.stream().anyMatch(this::hasManualStacks);
+        ClassFile cf = manualStacks
+                ? ClassFile.of(ClassFile.StackMapsOption.DROP_STACK_MAPS)
+                : ClassFile.of();
+
+        byte[] bytes = cf.build(thisDesc, classBuilder -> {
             classBuilder.withFlags(cls.accessFlags);
             classBuilder.withSuperclass(superDesc);
             classBuilder.withVersion(cls.majorVersion, cls.minorVersion);
@@ -88,31 +97,47 @@ public final class ClassFileEmitter {
             for (MethodDecl method : cls.methods) {
                 MethodTypeDesc mtd = MethodTypeDesc.ofDescriptor(method.descriptor);
                 classBuilder.withMethod(method.name, mtd, method.accessFlags,
-                        mb -> mb.withCode(cb -> emitCode(cb, method)));
+                        mb -> mb.withCode(cb -> emitCode(cb, method, manualStacks)));
             }
         });
 
         validateLimits(bytes, cls);
+        List<VerifyError> errors = cf.verify(bytes);
+        if (!errors.isEmpty()) {
+            throw new IllegalArgumentException("class failed verification: " + errors.getFirst());
+        }
         return bytes;
     }
 
-    private void emitCode(CodeBuilder cb, MethodDecl method) {
+    private boolean hasManualStacks(MethodDecl method) {
+        return method.code.stream().anyMatch(StackFrameItem.class::isInstance);
+    }
+
+    private void emitCode(CodeBuilder cb, MethodDecl method, boolean manualStacks) {
         Map<String, Label> labels = new HashMap<>();
         for (CodeItem item : method.code) {
             if (item instanceof LabelItem(String name)) {
                 labels.putIfAbsent(name, cb.newLabel());
             }
+            if (item instanceof StackFrameItem sf) {
+                labels.putIfAbsent(sf.label(), cb.newLabel());
+            }
         }
-        // Ensure catch/branch targets exist even if somehow missing (they shouldn't)
         for (CatchEntry c : method.catches) {
             labels.putIfAbsent(c.from(), cb.newLabel());
             labels.putIfAbsent(c.to(), cb.newLabel());
             labels.putIfAbsent(c.handler(), cb.newLabel());
         }
 
+        List<StackMapFrameInfo> frames = new ArrayList<>();
+
         for (CodeItem item : method.code) {
             switch (item) {
                 case LabelItem(String name) -> cb.labelBinding(labels.get(name));
+                case StackFrameItem sf -> frames.add(StackMapFrameInfo.of(
+                        requireLabel(labels, sf.label(), sf.line()),
+                        mapTypes(sf.locals(), labels, sf.line()),
+                        mapTypes(sf.stack(), labels, sf.line())));
                 case InsnItem insn -> emitInsn(cb, insn, labels);
                 case TableSwitchItem ts -> emitTableSwitch(cb, ts, labels);
                 case LookupSwitchItem ls -> emitLookupSwitch(cb, ls, labels);
@@ -129,6 +154,47 @@ public final class ClassFileEmitter {
                 cb.exceptionCatch(from, to, handler, ClassDesc.ofInternalName(c.typeInternalName()));
             }
         }
+
+        if (manualStacks) {
+            cb.with(StackMapTableAttribute.of(frames));
+        }
+    }
+
+    private List<StackMapFrameInfo.VerificationTypeInfo> mapTypes(
+            List<String> types, Map<String, Label> labels, int line) {
+        List<StackMapFrameInfo.VerificationTypeInfo> out = new ArrayList<>();
+        for (String t : types) {
+            out.add(mapType(t, labels, line));
+        }
+        return out;
+    }
+
+    private StackMapFrameInfo.VerificationTypeInfo mapType(
+            String t, Map<String, Label> labels, int line) {
+        return switch (t) {
+            case "top" -> StackMapFrameInfo.SimpleVerificationTypeInfo.TOP;
+            case "int", "integer" -> StackMapFrameInfo.SimpleVerificationTypeInfo.INTEGER;
+            case "float" -> StackMapFrameInfo.SimpleVerificationTypeInfo.FLOAT;
+            case "double" -> StackMapFrameInfo.SimpleVerificationTypeInfo.DOUBLE;
+            case "long" -> StackMapFrameInfo.SimpleVerificationTypeInfo.LONG;
+            case "null" -> StackMapFrameInfo.SimpleVerificationTypeInfo.NULL;
+            case "uninitializedThis", "this" ->
+                    StackMapFrameInfo.SimpleVerificationTypeInfo.UNINITIALIZED_THIS;
+            default -> {
+                if (t.startsWith("uninitialized ")) {
+                    String lab = t.substring("uninitialized ".length());
+                    yield StackMapFrameInfo.UninitializedVerificationTypeInfo.of(
+                            requireLabel(labels, lab, line));
+                }
+                ClassDesc desc;
+                if ((t.startsWith("L") && t.endsWith(";")) || t.startsWith("[")) {
+                    desc = ClassDesc.ofDescriptor(t);
+                } else {
+                    desc = ClassDesc.ofInternalName(t);
+                }
+                yield StackMapFrameInfo.ObjectVerificationTypeInfo.of(desc);
+            }
+        };
     }
 
     private void emitTableSwitch(CodeBuilder cb, TableSwitchItem ts, Map<String, Label> labels) {
@@ -232,10 +298,12 @@ public final class ClassFileEmitter {
 
             case IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE,
                  IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE,
-                 IF_ACMPEQ, IF_ACMPNE, GOTO, GOTO_W, JSR, JSR_W, IFNULL, IFNONNULL ->
+                 IF_ACMPEQ, IF_ACMPNE, GOTO, GOTO_W, IFNULL, IFNONNULL ->
                     cb.with(BranchInstruction.of(op, requireLabel(labels, ops.getFirst(), insn)));
 
-            case RET -> throw new UnsupportedOperationException("ret not yet emitted (needs DiscontinuedInstruction)");
+            case JSR, JSR_W -> cb.with(DiscontinuedInstruction.JsrInstruction.of(
+                    op, requireLabel(labels, ops.getFirst(), insn)));
+            case RET -> cb.with(DiscontinuedInstruction.RetInstruction.of(op, parseInt(ops.getFirst(), insn)));
             case TABLESWITCH, LOOKUPSWITCH ->
                     throw new IllegalStateException(def.mnemonic() + " should use dedicated CodeItem");
 

@@ -20,6 +20,11 @@ class ExamplesIT {
         assertEquals("yes", runMain("examples/BranchDemo.jasm", "BranchDemo"));
     }
 
+    @Test
+    void stackBranchDemoPrintsYes() throws Exception {
+        assertEquals("yes", runMain("examples/StackBranchDemo.jasm", "StackBranchDemo"));
+    }
+
     private static String runMain(String jasmPath, String className) throws Exception {
         byte[] bytes = new Assembler().assemble(Files.readString(Path.of(jasmPath)));
         var loader = new ByteClassLoader(className, bytes);

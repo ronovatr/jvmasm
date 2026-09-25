@@ -31,11 +31,25 @@ java -cp out HelloWorld
 |------|----------------|
 | `examples/HelloWorld.jasm` | getstatic / ldc / invokevirtual |
 | `examples/AddDemo.jasm` | bipush + iadd |
-| `examples/BranchDemo.jasm` | labels, ifne, goto |
+| `examples/BranchDemo.jasm` | labels, ifne, goto (auto stack maps) |
+| `examples/StackBranchDemo.jasm` | same + manual `.stack` frames |
+
+## `.stack` frames
+
+When any method contains `.stack`, the emitter uses `DROP_STACK_MAPS` and writes your frames:
+
+```
+Lelse:
+    .stack at Lelse locals [Ljava/lang/String; stack
+```
+
+Types: `top` `int` `float` `long` `double` `null` `uninitializedThis`, `uninitialized L`, or a class/array descriptor.
+
+Without `.stack`, stack maps are still auto-generated (convenient while learning).
 
 ## Status
 
-- Phase 0: full ISA mnemonic table
-- Phase 1–3: lexer/parser/emitter for most opcodes, branches, switches, `.catch`
-- Phase 5: disassembler (exact mnemonic preservation)
-- Still open: `invokedynamic`, manual `.stack` frames, full CFG stack-merge checking, `jsr`/`ret`
+- Phase 0–3: ISA, lexer/parser/emitter, branches, switches, `.catch`
+- Phase 4: manual `.stack` + CFG stack-depth merge checks
+- Phase 5: disassembler + round-trip
+- Still open: `invokedynamic`, strict “always require `.stack`” mode, richer frame sugar
