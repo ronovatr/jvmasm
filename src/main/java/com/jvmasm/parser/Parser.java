@@ -179,9 +179,27 @@ public final class Parser {
                 m.catches.add(new com.jvmasm.ast.CatchEntry(type, from, to, handler));
             }
             case ".stack" -> m.code.add(parseStackFrame(dir.line()));
+            case ".line" -> {
+                int n = parseIntToken(expect(TokenType.INT, "line number"));
+                m.code.add(new com.jvmasm.ast.LineItem(n, dir.line()));
+            }
+            case ".var" -> m.code.add(parseVar(dir.line()));
             default -> throw error("unsupported method directive '" + dir.text() + "'");
         }
         expectEndOfLine();
+    }
+
+    /** {@code .var SLOT is NAME Descriptor from L0 to L1} */
+    private com.jvmasm.ast.VarItem parseVar(int line) {
+        int slot = parseIntToken(expect(TokenType.INT, "local slot"));
+        expectIdentWord("is");
+        String name = expectIdentOrDesc("variable name");
+        String desc = expectIdentOrDesc("variable descriptor");
+        expectIdentWord("from");
+        String from = expectIdentOrDesc("from label");
+        expectIdentWord("to");
+        String to = expectIdentOrDesc("to label");
+        return new com.jvmasm.ast.VarItem(slot, name, desc, from, to, line);
     }
 
     /**

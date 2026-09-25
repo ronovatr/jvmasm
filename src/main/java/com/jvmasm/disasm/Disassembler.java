@@ -6,20 +6,26 @@ import java.lang.classfile.Attributes;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.ClassModel;
 import java.lang.classfile.CodeElement;
+import java.lang.classfile.FieldModel;
 import java.lang.classfile.Instruction;
 import java.lang.classfile.Label;
 import java.lang.classfile.MethodModel;
 import java.lang.classfile.Opcode;
 import java.lang.classfile.attribute.CodeAttribute;
-import java.lang.classfile.attribute.SourceFileAttribute;
+import java.lang.classfile.attribute.ConstantValueAttribute;
+import java.lang.classfile.attribute.StackMapFrameInfo;
+import java.lang.classfile.attribute.StackMapTableAttribute;
 import java.lang.classfile.instruction.ArrayLoadInstruction;
 import java.lang.classfile.instruction.ArrayStoreInstruction;
 import java.lang.classfile.instruction.BranchInstruction;
 import java.lang.classfile.instruction.ConstantInstruction;
 import java.lang.classfile.instruction.ConvertInstruction;
+import java.lang.classfile.instruction.DiscontinuedInstruction;
+import java.lang.classfile.instruction.ExceptionCatch;
 import java.lang.classfile.instruction.FieldInstruction;
 import java.lang.classfile.instruction.IncrementInstruction;
 import java.lang.classfile.instruction.InvokeInstruction;
+import java.lang.classfile.instruction.LineNumber;
 import java.lang.classfile.instruction.LoadInstruction;
 import java.lang.classfile.instruction.LookupSwitchInstruction;
 import java.lang.classfile.instruction.MonitorInstruction;
@@ -33,9 +39,8 @@ import java.lang.classfile.instruction.StackInstruction;
 import java.lang.classfile.instruction.StoreInstruction;
 import java.lang.classfile.instruction.TableSwitchInstruction;
 import java.lang.classfile.instruction.TypeCheckInstruction;
-import java.lang.classfile.instruction.DiscontinuedInstruction;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -62,6 +67,19 @@ public final class Disassembler {
                 out.append(".source \"").append(escape(sf.sourceFile().stringValue())).append("\"\n"));
         out.append('\n');
 
+        for (FieldModel field : cm.fields()) {
+            out.append(".field");
+            appendFlags(out, field.flags().flagsMask(), false);
+            out.append(' ').append(field.fieldType().stringValue())
+                    .append(' ').append(field.fieldName().stringValue());
+            field.findAttribute(Attributes.constantValue()).ifPresent(cv ->
+                    out.append(" = ").append(formatConstant(cv.constant().constantValue())));
+            out.append('\n');
+        }
+        if (!cm.fields().isEmpty()) {
+            out.append('\n');
+        }
+
         for (MethodModel method : cm.methods()) {
             out.append(".method");
             appendFlags(out, method.flags().flagsMask(), false);
@@ -84,10 +102,11 @@ public final class Disassembler {
 
     private void printCode(StringBuilder out, CodeAttribute code) {
         Map<Label, String> labelNames = new LinkedHashMap<>();
-        java.util.concurrent.atomic.AtomicInteger labelCounter = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger labelCounter =
+                new java.util.concurrent.atomic.AtomicInteger();
         java.util.function.Function<Label, String> nameLabel =
                 l -> "L" + labelCounter.getAndIncrement();
-        // Pre-scan for branch targets
+
         for (CodeElement el : code) {
             if (el instanceof BranchInstruction br) {
                 labelNames.computeIfAbsent(br.target(), nameLabel);
@@ -105,10 +124,55 @@ public final class Disassembler {
                 labelNames.computeIfAbsent(lab, nameLabel);
             }
         }
+        for (ExceptionCatch ec : code.exceptionHandlers()) {
+            labelNames.computeIfAbsent(ec.tryStart(), nameLabel);
+            labelNames.computeIfAbsent(ec.tryEnd(), nameLabel);
+            labelNames.computeIfAbsent(ec.handler(), nameLabel);
+        }
+        code.findAttribute(Attributes.stackMapTable()).ifPresent(smt -> {
+            for (StackMapFrameInfo frame : smt.entries()) {
+                labelNames.computeIfAbsent(frame.target(), nameLabel);
+            }
+        });
+
+        for (ExceptionCatch ec : code.exceptionHandlers()) {
+            out.append("    .catch ");
+            ec.catchType().ifPresentOrElse(
+                    t -> out.append(t.asInternalName()),
+                    () -> out.append("any"));
+            out.append(" from ").append(labelNames.get(ec.tryStart()))
+                    .append(" to ").append(labelNames.get(ec.tryEnd()))
+                    .append(" using ").append(labelNames.get(ec.handler()))
+                    .append('\n');
+        }
+
+        Map<Label, StackMapFrameInfo> framesByLabel = new LinkedHashMap<>();
+        code.findAttribute(Attributes.stackMapTable()).ifPresent(smt -> {
+            for (StackMapFrameInfo frame : smt.entries()) {
+                framesByLabel.put(frame.target(), frame);
+            }
+        });
 
         for (CodeElement el : code) {
             if (el instanceof Label lab) {
                 out.append(labelNames.get(lab)).append(":\n");
+                StackMapFrameInfo frame = framesByLabel.get(lab);
+                if (frame != null) {
+                    out.append("    .stack at ").append(labelNames.get(lab))
+                            .append(" locals");
+                    for (var t : frame.locals()) {
+                        out.append(' ').append(formatVerificationType(t, labelNames));
+                    }
+                    out.append(" stack");
+                    for (var t : frame.stack()) {
+                        out.append(' ').append(formatVerificationType(t, labelNames));
+                    }
+                    out.append('\n');
+                }
+                continue;
+            }
+            if (el instanceof LineNumber ln) {
+                out.append("    .line ").append(ln.line()).append('\n');
                 continue;
             }
             if (!(el instanceof Instruction insn)) {
@@ -116,6 +180,26 @@ public final class Disassembler {
             }
             out.append("    ").append(formatInstruction(insn, labelNames)).append('\n');
         }
+    }
+
+    private static String formatVerificationType(
+            StackMapFrameInfo.VerificationTypeInfo t, Map<Label, String> labels) {
+        return switch (t) {
+            case StackMapFrameInfo.SimpleVerificationTypeInfo s -> switch (s) {
+                case TOP -> "top";
+                case INTEGER -> "int";
+                case FLOAT -> "float";
+                case DOUBLE -> "double";
+                case LONG -> "long";
+                case NULL -> "null";
+                case UNINITIALIZED_THIS -> "uninitializedThis";
+            };
+            case StackMapFrameInfo.ObjectVerificationTypeInfo o ->
+                    o.className().asInternalName();
+            case StackMapFrameInfo.UninitializedVerificationTypeInfo u ->
+                    "uninitialized " + labels.get(u.newTarget());
+            default -> t.toString();
+        };
     }
 
     private String formatInstruction(Instruction insn, Map<Label, String> labels) {
@@ -169,7 +253,6 @@ public final class Disassembler {
     }
 
     private static String formatLoadStore(String mnem, Opcode op, int slot) {
-        // Shorthand opcodes encode the slot — print bare mnemonic.
         if (op.sizeIfFixed() == 1) {
             return mnem;
         }
@@ -177,10 +260,6 @@ public final class Disassembler {
                 || op == Opcode.DLOAD_W || op == Opcode.ALOAD_W
                 || op == Opcode.ISTORE_W || op == Opcode.LSTORE_W || op == Opcode.FSTORE_W
                 || op == Opcode.DSTORE_W || op == Opcode.ASTORE_W) {
-            String base = mnem.endsWith("_w") ? mnem.substring(0, mnem.length() - 2) : mnem;
-            // Class-File API uses ILOAD_W; our language writes "wide iload"
-            String historic = base.contains("_") ? base : base;
-            // Map ILOAD_W -> wide iload
             String bare = op.name().toLowerCase().replace("_w", "");
             return "wide " + bare + " " + slot;
         }
@@ -202,7 +281,9 @@ public final class Disassembler {
         sb.append(" { ");
         boolean first = true;
         for (var c : ts.cases()) {
-            if (!first) sb.append(' ');
+            if (!first) {
+                sb.append(' ');
+            }
             sb.append(labels.get(c.target()));
             first = false;
         }
@@ -215,7 +296,9 @@ public final class Disassembler {
         sb.append(labels.get(ls.defaultTarget())).append(" { ");
         boolean first = true;
         for (var c : ls.cases()) {
-            if (!first) sb.append(", ");
+            if (!first) {
+                sb.append(", ");
+            }
             sb.append(c.caseValue()).append(" -> ").append(labels.get(c.target()));
             first = false;
         }
@@ -224,7 +307,6 @@ public final class Disassembler {
     }
 
     private static String mnemonicFor(Opcode op) {
-        // Wide pseudo-opcodes are printed via formatLoadStore as "wide …"
         String name = op.name().toLowerCase();
         if (InstructionDef.lookup(name).isPresent()) {
             return name;
@@ -233,20 +315,52 @@ public final class Disassembler {
     }
 
     private static void appendFlags(StringBuilder out, int flags, boolean isClass) {
-        if ((flags & ClassFile.ACC_PUBLIC) != 0) out.append(" public");
-        if ((flags & ClassFile.ACC_PRIVATE) != 0) out.append(" private");
-        if ((flags & ClassFile.ACC_PROTECTED) != 0) out.append(" protected");
-        if ((flags & ClassFile.ACC_STATIC) != 0) out.append(" static");
-        if ((flags & ClassFile.ACC_FINAL) != 0) out.append(" final");
-        if ((flags & ClassFile.ACC_INTERFACE) != 0) out.append(" interface");
-        if ((flags & ClassFile.ACC_ABSTRACT) != 0) out.append(" abstract");
-        if ((flags & ClassFile.ACC_SYNTHETIC) != 0) out.append(" synthetic");
-        if ((flags & ClassFile.ACC_ENUM) != 0) out.append(" enum");
+        if ((flags & ClassFile.ACC_PUBLIC) != 0) {
+            out.append(" public");
+        }
+        if ((flags & ClassFile.ACC_PRIVATE) != 0) {
+            out.append(" private");
+        }
+        if ((flags & ClassFile.ACC_PROTECTED) != 0) {
+            out.append(" protected");
+        }
+        if ((flags & ClassFile.ACC_STATIC) != 0) {
+            out.append(" static");
+        }
+        if ((flags & ClassFile.ACC_FINAL) != 0) {
+            out.append(" final");
+        }
+        if ((flags & ClassFile.ACC_INTERFACE) != 0) {
+            out.append(" interface");
+        }
+        if ((flags & ClassFile.ACC_ABSTRACT) != 0) {
+            out.append(" abstract");
+        }
+        if ((flags & ClassFile.ACC_SYNTHETIC) != 0) {
+            out.append(" synthetic");
+        }
+        if ((flags & ClassFile.ACC_ENUM) != 0) {
+            out.append(" enum");
+        }
         if (!isClass) {
-            if ((flags & ClassFile.ACC_SYNCHRONIZED) != 0) out.append(" synchronized");
-            if ((flags & ClassFile.ACC_BRIDGE) != 0) out.append(" bridge");
-            if ((flags & ClassFile.ACC_VARARGS) != 0) out.append(" varargs");
-            if ((flags & ClassFile.ACC_NATIVE) != 0) out.append(" native");
+            if ((flags & ClassFile.ACC_SYNCHRONIZED) != 0) {
+                out.append(" synchronized");
+            }
+            if ((flags & ClassFile.ACC_BRIDGE) != 0) {
+                out.append(" bridge");
+            }
+            if ((flags & ClassFile.ACC_VARARGS) != 0) {
+                out.append(" varargs");
+            }
+            if ((flags & ClassFile.ACC_NATIVE) != 0) {
+                out.append(" native");
+            }
+            if ((flags & ClassFile.ACC_VOLATILE) != 0) {
+                out.append(" volatile");
+            }
+            if ((flags & ClassFile.ACC_TRANSIENT) != 0) {
+                out.append(" transient");
+            }
         }
     }
 

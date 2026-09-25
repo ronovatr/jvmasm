@@ -1,0 +1,25 @@
+; Exception handler demo — catch RuntimeException and print "caught"
+.class public CatchDemo
+.super java/lang/Object
+
+.method public static main([Ljava/lang/String;)V
+    .limit stack 2
+    .limit locals 1
+    .catch java/lang/RuntimeException from Ltry to Lend using Lhandler
+Ltry:
+    .line 10
+    new java/lang/RuntimeException
+    dup
+    invokespecial java/lang/RuntimeException/<init>()V
+    athrow
+Lend:
+Lhandler:
+    .stack at Lhandler locals [Ljava/lang/String; stack java/lang/RuntimeException
+    .line 20
+    .var 0 is args [Ljava/lang/String; from Ltry to Lhandler
+    pop
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    ldc "caught"
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+    return
+.end method

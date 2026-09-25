@@ -25,6 +25,16 @@ class ExamplesIT {
         assertEquals("yes", runMain("examples/StackBranchDemo.jasm", "StackBranchDemo"));
     }
 
+    @Test
+    void catchDemoPrintsCaught() throws Exception {
+        assertEquals("caught", runMain("examples/CatchDemo.jasm", "CatchDemo"));
+    }
+
+    @Test
+    void constFieldDemoPrints42() throws Exception {
+        assertEquals("42", runMain("examples/ConstFieldDemo.jasm", "ConstFieldDemo"));
+    }
+
     private static String runMain(String jasmPath, String className) throws Exception {
         byte[] bytes = new Assembler().assemble(Files.readString(Path.of(jasmPath)));
         var loader = new ByteClassLoader(className, bytes);

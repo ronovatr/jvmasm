@@ -3,10 +3,12 @@ package com.jvmasm.resolve;
 import com.jvmasm.ast.CodeItem;
 import com.jvmasm.ast.InsnItem;
 import com.jvmasm.ast.LabelItem;
+import com.jvmasm.ast.LineItem;
 import com.jvmasm.ast.LookupSwitchItem;
 import com.jvmasm.ast.MethodDecl;
 import com.jvmasm.ast.StackFrameItem;
 import com.jvmasm.ast.TableSwitchItem;
+import com.jvmasm.ast.VarItem;
 import com.jvmasm.isa.InstructionDef;
 
 import java.util.ArrayList;
@@ -57,6 +59,8 @@ public final class StackDepthChecker {
             for (CodeItem item : b.items) {
                 switch (item) {
                     case StackFrameItem ignored -> { }
+                    case LineItem ignored -> { }
+                    case VarItem ignored -> { }
                     case TableSwitchItem ts -> {
                         depth -= 1;
                         ensureNonNegative(depth, method, item);
@@ -314,6 +318,8 @@ public final class StackDepthChecker {
             case TableSwitchItem t -> t.line();
             case LookupSwitchItem l -> l.line();
             case StackFrameItem s -> s.line();
+            case LineItem li -> li.sourceLine();
+            case VarItem v -> v.line();
             case LabelItem ignored -> -1;
         };
     }

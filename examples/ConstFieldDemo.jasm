@@ -1,0 +1,14 @@
+; Field with ConstantValue
+.class public ConstFieldDemo
+.super java/lang/Object
+
+.field public static final I MAX = 42
+
+.method public static main([Ljava/lang/String;)V
+    .limit stack 2
+    .limit locals 1
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    getstatic ConstFieldDemo/MAX I
+    invokevirtual java/io/PrintStream/println(I)V
+    return
+.end method

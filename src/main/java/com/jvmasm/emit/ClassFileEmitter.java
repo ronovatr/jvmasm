@@ -6,17 +6,20 @@ import com.jvmasm.ast.CodeItem;
 import com.jvmasm.ast.FieldDecl;
 import com.jvmasm.ast.InsnItem;
 import com.jvmasm.ast.LabelItem;
+import com.jvmasm.ast.LineItem;
 import com.jvmasm.ast.LookupCase;
 import com.jvmasm.ast.LookupSwitchItem;
 import com.jvmasm.ast.MethodDecl;
 import com.jvmasm.ast.StackFrameItem;
 import com.jvmasm.ast.TableSwitchItem;
+import com.jvmasm.ast.VarItem;
 import com.jvmasm.isa.InstructionDef;
 
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
 import java.lang.classfile.Opcode;
+import java.lang.classfile.attribute.ConstantValueAttribute;
 import java.lang.classfile.attribute.SourceFileAttribute;
 import java.lang.classfile.attribute.StackMapFrameInfo;
 import java.lang.classfile.attribute.StackMapTableAttribute;
@@ -91,7 +94,13 @@ public final class ClassFileEmitter {
                 classBuilder.withField(
                         field.name(),
                         ClassDesc.ofDescriptor(field.descriptor()),
-                        field.accessFlags());
+                        fb -> {
+                            fb.withFlags(field.accessFlags());
+                            if (field.constantValue() != null) {
+                                fb.with(ConstantValueAttribute.of(
+                                        parseConstantDesc(field.descriptor(), field.constantValue())));
+                            }
+                        });
             }
 
             for (MethodDecl method : cls.methods) {
@@ -122,6 +131,10 @@ public final class ClassFileEmitter {
             if (item instanceof StackFrameItem sf) {
                 labels.putIfAbsent(sf.label(), cb.newLabel());
             }
+            if (item instanceof VarItem v) {
+                labels.putIfAbsent(v.fromLabel(), cb.newLabel());
+                labels.putIfAbsent(v.toLabel(), cb.newLabel());
+            }
         }
         for (CatchEntry c : method.catches) {
             labels.putIfAbsent(c.from(), cb.newLabel());
@@ -138,6 +151,13 @@ public final class ClassFileEmitter {
                         requireLabel(labels, sf.label(), sf.line()),
                         mapTypes(sf.locals(), labels, sf.line()),
                         mapTypes(sf.stack(), labels, sf.line())));
+                case LineItem line -> cb.lineNumber(line.number());
+                case VarItem v -> cb.localVariable(
+                        v.slot(),
+                        v.name(),
+                        ClassDesc.ofDescriptor(v.descriptor()),
+                        requireLabel(labels, v.fromLabel(), v.line()),
+                        requireLabel(labels, v.toLabel(), v.line()));
                 case InsnItem insn -> emitInsn(cb, insn, labels);
                 case TableSwitchItem ts -> emitTableSwitch(cb, ts, labels);
                 case LookupSwitchItem ls -> emitLookupSwitch(cb, ls, labels);
@@ -501,6 +521,32 @@ public final class ClassFileEmitter {
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("bad int '" + text + "' (line " + insn.line() + ")");
         }
+    }
+
+    private static ConstantDesc parseConstantDesc(String fieldDesc, String text) {
+        return switch (fieldDesc) {
+            case "I", "B", "C", "S", "Z" -> {
+                if (text.startsWith("0x") || text.startsWith("0X")) {
+                    yield Integer.parseInt(text.substring(2), 16);
+                }
+                yield Integer.parseInt(text);
+            }
+            case "J" -> {
+                String t = text.endsWith("L") || text.endsWith("l")
+                        ? text.substring(0, text.length() - 1) : text;
+                if (t.startsWith("0x") || t.startsWith("0X")) {
+                    yield Long.parseLong(t.substring(2), 16);
+                }
+                yield Long.parseLong(t);
+            }
+            case "F" -> Float.parseFloat(
+                    text.endsWith("f") || text.endsWith("F") ? text.substring(0, text.length() - 1) : text);
+            case "D" -> Double.parseDouble(
+                    text.endsWith("d") || text.endsWith("D") ? text.substring(0, text.length() - 1) : text);
+            case "Ljava/lang/String;" -> text;
+            default -> throw new IllegalArgumentException(
+                    "ConstantValue not supported for descriptor " + fieldDesc);
+        };
     }
 
     private static String stripSuffix(String s, int n) {

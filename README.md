@@ -33,6 +33,8 @@ java -cp out HelloWorld
 | `examples/AddDemo.jasm` | bipush + iadd |
 | `examples/BranchDemo.jasm` | labels, ifne, goto (auto stack maps) |
 | `examples/StackBranchDemo.jasm` | same + manual `.stack` frames |
+| `examples/CatchDemo.jasm` | `.catch`, handler frame, `.line` / `.var` |
+| `examples/ConstFieldDemo.jasm` | field `ConstantValue` (`= 42`) |
 
 ## `.stack` frames
 
@@ -51,5 +53,6 @@ Without `.stack`, stack maps are still auto-generated (convenient while learning
 
 - Phase 0–3: ISA, lexer/parser/emitter, branches, switches, `.catch`
 - Phase 4: manual `.stack` + CFG stack-depth merge checks
-- Phase 5: disassembler + round-trip
-- Still open: `invokedynamic`, strict “always require `.stack`” mode, richer frame sugar
+- Phase 5: disassembler (`.stack` / `.catch` / fields) + round-trip
+- Debug attrs: `.line`, `.var`; field `ConstantValue`
+- Still open: `invokedynamic`, strict “always require `.stack`” mode
