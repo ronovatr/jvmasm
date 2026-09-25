@@ -35,6 +35,11 @@ class ExamplesIT {
         assertEquals("42", runMain("examples/ConstFieldDemo.jasm", "ConstFieldDemo"));
     }
 
+    @Test
+    void indyDemoPrintsHello() throws Exception {
+        assertEquals("Hello, indy", runMain("examples/IndyDemo.jasm", "IndyDemo"));
+    }
+
     private static String runMain(String jasmPath, String className) throws Exception {
         byte[] bytes = new Assembler().assemble(Files.readString(Path.of(jasmPath)));
         var loader = new ByteClassLoader(className, bytes);

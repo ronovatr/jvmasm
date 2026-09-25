@@ -1,5 +1,6 @@
 package com.jvmasm.emit;
 
+import com.jvmasm.ast.BootstrapDecl;
 import com.jvmasm.ast.CatchEntry;
 import com.jvmasm.ast.ClassDecl;
 import com.jvmasm.ast.CodeItem;
@@ -33,6 +34,7 @@ import java.lang.classfile.instruction.ConstantInstruction;
 import java.lang.classfile.instruction.ConvertInstruction;
 import java.lang.classfile.instruction.FieldInstruction;
 import java.lang.classfile.instruction.IncrementInstruction;
+import java.lang.classfile.instruction.InvokeDynamicInstruction;
 import java.lang.classfile.instruction.InvokeInstruction;
 import java.lang.classfile.instruction.LoadInstruction;
 import java.lang.classfile.instruction.MonitorInstruction;
@@ -51,11 +53,14 @@ import java.lang.classfile.instruction.ThrowInstruction;
 import java.lang.classfile.instruction.TypeCheckInstruction;
 import java.lang.constant.ClassDesc;
 import java.lang.constant.ConstantDesc;
+import java.lang.constant.DirectMethodHandleDesc;
+import java.lang.constant.MethodHandleDesc;
 import java.lang.constant.MethodTypeDesc;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Emits {@code .class} bytes via the JDK Class-File API.
@@ -103,10 +108,15 @@ public final class ClassFileEmitter {
                         });
             }
 
+            Map<String, BootstrapDecl> bootstraps = cls.bootstraps.stream()
+                    .collect(Collectors.toMap(BootstrapDecl::name, b -> b, (a, b) -> {
+                        throw new IllegalArgumentException("duplicate bootstrap '" + a.name() + "'");
+                    }));
+
             for (MethodDecl method : cls.methods) {
                 MethodTypeDesc mtd = MethodTypeDesc.ofDescriptor(method.descriptor);
                 classBuilder.withMethod(method.name, mtd, method.accessFlags,
-                        mb -> mb.withCode(cb -> emitCode(cb, method, manualStacks)));
+                        mb -> mb.withCode(cb -> emitCode(cb, method, manualStacks, bootstraps)));
             }
         });
 
@@ -122,7 +132,11 @@ public final class ClassFileEmitter {
         return method.code.stream().anyMatch(StackFrameItem.class::isInstance);
     }
 
-    private void emitCode(CodeBuilder cb, MethodDecl method, boolean manualStacks) {
+    private void emitCode(
+            CodeBuilder cb,
+            MethodDecl method,
+            boolean manualStacks,
+            Map<String, BootstrapDecl> bootstraps) {
         Map<String, Label> labels = new HashMap<>();
         for (CodeItem item : method.code) {
             if (item instanceof LabelItem(String name)) {
@@ -158,7 +172,7 @@ public final class ClassFileEmitter {
                         ClassDesc.ofDescriptor(v.descriptor()),
                         requireLabel(labels, v.fromLabel(), v.line()),
                         requireLabel(labels, v.toLabel(), v.line()));
-                case InsnItem insn -> emitInsn(cb, insn, labels);
+                case InsnItem insn -> emitInsn(cb, insn, labels, bootstraps);
                 case TableSwitchItem ts -> emitTableSwitch(cb, ts, labels);
                 case LookupSwitchItem ls -> emitLookupSwitch(cb, ls, labels);
             }
@@ -248,7 +262,11 @@ public final class ClassFileEmitter {
         return label;
     }
 
-    private void emitInsn(CodeBuilder cb, InsnItem insn, Map<String, Label> labels) {
+    private void emitInsn(
+            CodeBuilder cb,
+            InsnItem insn,
+            Map<String, Label> labels,
+            Map<String, BootstrapDecl> bootstraps) {
         InstructionDef def = insn.def();
         Opcode op = insn.wide() ? InstructionDef.wideOpcode(def) : requireOpcode(def);
         List<String> ops = insn.operands();
@@ -330,7 +348,7 @@ public final class ClassFileEmitter {
             case GETSTATIC, PUTSTATIC, GETFIELD, PUTFIELD -> emitField(cb, op, ops, insn);
             case INVOKEVIRTUAL, INVOKESPECIAL, INVOKESTATIC -> emitInvoke(cb, op, ops.getFirst(), false, insn);
             case INVOKEINTERFACE -> emitInvoke(cb, op, ops.getFirst(), true, insn);
-            case INVOKEDYNAMIC -> throw new UnsupportedOperationException("invokedynamic not yet emitted");
+            case INVOKEDYNAMIC -> emitInvokeDynamic(cb, insn, bootstraps);
 
             case NEW -> cb.with(NewObjectInstruction.of(classEntry(cb, ops.getFirst())));
             case NEWARRAY -> cb.with(NewPrimitiveArrayInstruction.of(atype(ops.getFirst(), insn)));
@@ -422,6 +440,121 @@ public final class ClassFileEmitter {
         var fieldRef = cb.constantPool().fieldRefEntry(
                 ClassDesc.ofInternalName(owner), name, ClassDesc.ofDescriptor(desc));
         cb.with(FieldInstruction.of(op, fieldRef));
+    }
+
+    private void emitInvokeDynamic(
+            CodeBuilder cb, InsnItem insn, Map<String, BootstrapDecl> bootstraps) {
+        List<String> ops = insn.operands();
+        String name;
+        String desc;
+        String bsmName;
+        if (ops.size() == 2) {
+            String nameDesc = ops.get(0);
+            int paren = nameDesc.indexOf('(');
+            if (paren < 0) {
+                throw new IllegalArgumentException(
+                        "invokedynamic needs name()Desc (line " + insn.line() + ")");
+            }
+            name = nameDesc.substring(0, paren);
+            desc = nameDesc.substring(paren);
+            bsmName = ops.get(1);
+        } else if (ops.size() >= 3) {
+            name = ops.get(0);
+            desc = ops.get(1);
+            bsmName = ops.get(2);
+        } else {
+            throw new IllegalArgumentException("invokedynamic operand count (line " + insn.line() + ")");
+        }
+
+        BootstrapDecl bsm = bootstraps.get(bsmName);
+        if (bsm == null) {
+            throw new IllegalArgumentException(
+                    "unknown bootstrap '" + bsmName + "' (line " + insn.line() + ")");
+        }
+
+        DirectMethodHandleDesc.Kind kind = mapHandleKind(bsm.handleKind(), insn.line());
+        DirectMethodHandleDesc handle = switch (kind) {
+            case GETTER, SETTER, STATIC_GETTER, STATIC_SETTER -> MethodHandleDesc.ofField(
+                    kind,
+                    ClassDesc.ofInternalName(bsm.owner()),
+                    bsm.methodName(),
+                    ClassDesc.ofDescriptor(bsm.descriptor()));
+            case CONSTRUCTOR -> MethodHandleDesc.ofConstructor(
+                    ClassDesc.ofInternalName(bsm.owner()),
+                    MethodTypeDesc.ofDescriptor(bsm.descriptor()).parameterArray());
+            default -> MethodHandleDesc.ofMethod(
+                    kind,
+                    ClassDesc.ofInternalName(bsm.owner()),
+                    bsm.methodName(),
+                    MethodTypeDesc.ofDescriptor(bsm.descriptor()));
+        };
+
+        List<ConstantDesc> bsmArgs = new ArrayList<>();
+        for (String arg : bsm.args()) {
+            bsmArgs.add(parseBootstrapArg(arg));
+        }
+
+        var bsmEntry = cb.constantPool().bsmEntry(handle, bsmArgs);
+        var nameAndType = cb.constantPool().nameAndTypeEntry(name, MethodTypeDesc.ofDescriptor(desc));
+        var indy = cb.constantPool().invokeDynamicEntry(bsmEntry, nameAndType);
+        cb.with(InvokeDynamicInstruction.of(indy));
+    }
+
+    private static DirectMethodHandleDesc.Kind mapHandleKind(String kind, int line) {
+        String k = kind.toLowerCase();
+        return switch (k) {
+            case "invokestatic", "static" -> DirectMethodHandleDesc.Kind.STATIC;
+            case "invokevirtual", "virtual" -> DirectMethodHandleDesc.Kind.VIRTUAL;
+            case "invokespecial", "special" -> DirectMethodHandleDesc.Kind.SPECIAL;
+            case "invokeinterface", "interface", "interface_virtual" ->
+                    DirectMethodHandleDesc.Kind.INTERFACE_VIRTUAL;
+            case "interface_static" -> DirectMethodHandleDesc.Kind.INTERFACE_STATIC;
+            case "interface_special" -> DirectMethodHandleDesc.Kind.INTERFACE_SPECIAL;
+            case "newinvokespecial", "constructor" -> DirectMethodHandleDesc.Kind.CONSTRUCTOR;
+            case "getfield", "getter" -> DirectMethodHandleDesc.Kind.GETTER;
+            case "putfield", "setter" -> DirectMethodHandleDesc.Kind.SETTER;
+            case "getstatic", "static_getter" -> DirectMethodHandleDesc.Kind.STATIC_GETTER;
+            case "putstatic", "static_setter" -> DirectMethodHandleDesc.Kind.STATIC_SETTER;
+            default -> {
+                try {
+                    yield DirectMethodHandleDesc.Kind.valueOf(kind.toUpperCase());
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalArgumentException(
+                            "unknown method handle kind '" + kind + "' (line " + line + ")");
+                }
+            }
+        };
+    }
+
+    private static ConstantDesc parseBootstrapArg(String text) {
+        if (text.startsWith("0x") || text.startsWith("0X")
+                || (text.length() > 0 && (Character.isDigit(text.charAt(0)) || text.charAt(0) == '-'))) {
+            if (text.endsWith("L") || text.endsWith("l")) {
+                return Long.parseLong(text.substring(0, text.length() - 1));
+            }
+            if (text.endsWith("f") || text.endsWith("F")) {
+                return Float.parseFloat(text.substring(0, text.length() - 1));
+            }
+            if (text.endsWith("d") || text.endsWith("D")) {
+                return Double.parseDouble(text.substring(0, text.length() - 1));
+            }
+            if (text.contains(".")) {
+                return Double.parseDouble(text);
+            }
+            if (text.startsWith("0x") || text.startsWith("0X")) {
+                return Integer.parseInt(text.substring(2), 16);
+            }
+            return Integer.parseInt(text);
+        }
+        if ((text.startsWith("L") && text.endsWith(";")) || text.startsWith("[")) {
+            return ClassDesc.ofDescriptor(text);
+        }
+        if (text.contains("/") && !text.contains("(")) {
+            // Class internal name used as Class constant
+            return ClassDesc.ofInternalName(text);
+        }
+        // Default: string constant (already unquoted by lexer for STRING tokens)
+        return text;
     }
 
     private void emitInvoke(CodeBuilder cb, Opcode op, String ref, boolean iface, InsnItem insn) {

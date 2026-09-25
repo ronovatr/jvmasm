@@ -1,0 +1,14 @@
+; invokedynamic via StringConcatFactory.makeConcatWithConstants (constant recipe)
+.class public IndyDemo
+.super java/lang/Object
+
+.bootstrap B0 invokestatic java/lang/invoke/StringConcatFactory/makeConcatWithConstants(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite; "Hello, indy"
+
+.method public static main([Ljava/lang/String;)V
+    .limit stack 2
+    .limit locals 1
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    invokedynamic makeConcat()Ljava/lang/String; B0
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+    return
+.end method

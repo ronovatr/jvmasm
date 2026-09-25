@@ -64,9 +64,45 @@ public final class Parser {
             }
             case ".field" -> cls.fields.add(parseField());
             case ".method" -> cls.methods.add(parseMethod());
-            default -> throw error("unsupported directive '" + dir.text() + "' in Phase 1");
+            case ".bootstrap" -> cls.bootstraps.add(parseBootstrap(dir.line()));
+            default -> throw error("unsupported directive '" + dir.text() + "'");
         }
         expectEndOfLine();
+    }
+
+    /**
+     * {@code .bootstrap NAME invokestatic Owner/name(Desc)Ret [args...]}
+     * Handle kinds: invokestatic, invokevirtual, invokespecial, invokeinterface,
+     * getfield, putfield, getstatic, putstatic, newInvokeSpecial,
+     * or Kind enum names (STATIC, VIRTUAL, …).
+     */
+    private com.jvmasm.ast.BootstrapDecl parseBootstrap(int line) {
+        String name = expectIdentOrDesc("bootstrap name");
+        String handleKind = expectIdentOrDesc("method handle kind");
+        String ownerNameDesc = expectIdentOrDesc("bootstrap method ref");
+        int paren = ownerNameDesc.indexOf('(');
+        if (paren < 0) {
+            throw error("bootstrap method ref needs Owner/name(Desc)Ret");
+        }
+        String ownerAndName = ownerNameDesc.substring(0, paren);
+        String descriptor = ownerNameDesc.substring(paren);
+        int slash = ownerAndName.lastIndexOf('/');
+        if (slash < 0) {
+            throw error("bootstrap method ref needs Owner/name");
+        }
+        String owner = ownerAndName.substring(0, slash);
+        String methodName = ownerAndName.substring(slash + 1);
+        List<String> args = new ArrayList<>();
+        while (!check(TokenType.NEWLINE) && !check(TokenType.EOF)) {
+            if (check(TokenType.STRING) || check(TokenType.INT) || check(TokenType.FLOAT)
+                    || check(TokenType.IDENT) || check(TokenType.MNEMONIC)) {
+                args.add(advance().text());
+            } else {
+                throw error("unexpected bootstrap arg: " + peek());
+            }
+        }
+        return new com.jvmasm.ast.BootstrapDecl(
+                name, handleKind, owner, methodName, descriptor, List.copyOf(args), line);
     }
 
     private void parseClassHeader(ClassDecl cls) {
@@ -297,10 +333,20 @@ public final class Parser {
                 operands.add(expectOperandText());
                 operands.add(expect(TokenType.INT, "dims").text());
             }
+            case INVOKEDYNAMIC -> {
+                // invokedynamic name()Desc bootstrapName
+                // or: invokedynamic name Desc bootstrapName
+                operands.add(expectOperandText());
+                if (check(TokenType.IDENT) || check(TokenType.MNEMONIC)) {
+                    String maybe = peek().text();
+                    if (maybe.startsWith("(")) {
+                        operands.add(advance().text());
+                    }
+                }
+                operands.add(expectOperandText()); // bootstrap symbolic name
+            }
             case WIDE_PREFIX, RESERVED -> throw error("internal: unexpected shape " + shape);
             case TABLESWITCH, LOOKUPSWITCH -> throw error("internal: switch handled above");
-            case INVOKEDYNAMIC ->
-                    throw error("opcode 'invokedynamic' not implemented yet");
         }
         return new InsnItem(def, wide, List.copyOf(operands), mnem.line());
     }

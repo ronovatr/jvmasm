@@ -12,6 +12,7 @@ public final class ClassDecl {
     public String sourceFile;
     public final List<FieldDecl> fields = new ArrayList<>();
     public final List<MethodDecl> methods = new ArrayList<>();
+    public final List<BootstrapDecl> bootstraps = new ArrayList<>();
     /** Default Java 21 (major 65); override with {@code .version}. */
     public int majorVersion = 65;
     public int minorVersion = 0;

@@ -241,6 +241,7 @@ public final class StackDepthChecker {
             case PUTFIELD -> -(1 + fieldPush(insn));
             case INVOKEVIRTUAL, INVOKESPECIAL, INVOKEINTERFACE -> invokeDelta(insn, true);
             case INVOKESTATIC -> invokeDelta(insn, false);
+            case INVOKEDYNAMIC -> invokeDynamicDelta(insn);
             case NEW, ANEWARRAY, NEWARRAY -> +1;
             case ATHROW -> -1;
             case RETURN -> 0;
@@ -262,6 +263,14 @@ public final class StackDepthChecker {
     private static String guessDesc(String ref) {
         int i = ref.lastIndexOf(' ');
         return i >= 0 ? ref.substring(i + 1) : "I";
+    }
+
+    private static int invokeDynamicDelta(InsnItem insn) {
+        String nameDesc = insn.operands().getFirst();
+        int paren = nameDesc.indexOf('(');
+        String desc = paren >= 0 ? nameDesc.substring(paren)
+                : (insn.operands().size() > 1 ? insn.operands().get(1) : "()V");
+        return returnSlots(desc) - argSlots(desc);
     }
 
     private static int invokeDelta(InsnItem insn, boolean hasReceiver) {

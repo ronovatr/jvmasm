@@ -24,6 +24,7 @@ import java.lang.classfile.instruction.DiscontinuedInstruction;
 import java.lang.classfile.instruction.ExceptionCatch;
 import java.lang.classfile.instruction.FieldInstruction;
 import java.lang.classfile.instruction.IncrementInstruction;
+import java.lang.classfile.instruction.InvokeDynamicInstruction;
 import java.lang.classfile.instruction.InvokeInstruction;
 import java.lang.classfile.instruction.LineNumber;
 import java.lang.classfile.instruction.LoadInstruction;
@@ -240,8 +241,11 @@ public final class Disassembler {
             case TypeCheckInstruction t -> mnem + " " + t.type().asInternalName();
             case TableSwitchInstruction ts -> formatTableSwitch(ts, labels);
             case LookupSwitchInstruction ls -> formatLookupSwitch(ls, labels);
-            case DiscontinuedInstruction.JsrInstruction jsr ->
-                    mnemonicFor(jsr.opcode()) + " " + labels.get(jsr.target());
+            case InvokeDynamicInstruction idi -> {
+                String bsm = formatBootstrap(idi);
+                yield "invokedynamic " + idi.name().stringValue() + idi.type().stringValue()
+                        + " ; bootstrap " + bsm;
+            }
             case DiscontinuedInstruction.RetInstruction ret -> {
                 if (ret.opcode() == Opcode.RET_W) {
                     yield "wide ret " + ret.slot();
@@ -250,6 +254,16 @@ public final class Disassembler {
             }
             default -> mnem + " ; TODO unhandled " + insn.getClass().getSimpleName();
         };
+    }
+
+    private static String formatBootstrap(InvokeDynamicInstruction idi) {
+        var mh = idi.bootstrapMethod();
+        StringBuilder sb = new StringBuilder(mh.methodName());
+        sb.append(mh.lookupDescriptor());
+        for (var arg : idi.bootstrapArgs()) {
+            sb.append(' ').append(formatConstant(arg));
+        }
+        return sb.toString();
     }
 
     private static String formatLoadStore(String mnem, Opcode op, int slot) {
