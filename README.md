@@ -35,6 +35,7 @@ java -cp out HelloWorld
 | `examples/StackBranchDemo.jasm` | same + manual `.stack` frames |
 | `examples/CatchDemo.jasm` | `.catch`, handler frame, `.line` / `.var` |
 | `examples/ConstFieldDemo.jasm` | field `ConstantValue` (`= 42`) |
+| `examples/IndyDemo.jasm` | `.bootstrap` + `invokedynamic` |
 
 ## `.stack` frames
 
@@ -49,10 +50,16 @@ Types: `top` `int` `float` `long` `double` `null` `uninitializedThis`, `uninitia
 
 Without `.stack`, stack maps are still auto-generated (convenient while learning).
 
+## `invokedynamic`
+
+```
+.bootstrap B0 invokestatic java/lang/invoke/StringConcatFactory/makeConcatWithConstants(... )Ljava/lang/invoke/CallSite; "Hello, indy"
+
+invokedynamic makeConcat()Ljava/lang/String; B0
+```
+
 ## Status
 
-- Phase 0–3: ISA, lexer/parser/emitter, branches, switches, `.catch`
-- Phase 4: manual `.stack` + CFG stack-depth merge checks
-- Phase 5: disassembler (`.stack` / `.catch` / fields) + round-trip
-- Debug attrs: `.line`, `.var`; field `ConstantValue`
-- Still open: `invokedynamic`, strict “always require `.stack`” mode
+- Full historical ISA table, assembler, disassembler, round-trip tests
+- Branches, switches, `.catch`, `.stack`, `.line`, `.var`, ConstantValue, **invokedynamic**
+- Still open: strict “always require `.stack`” mode, richer bootstrap round-trip in disasm
