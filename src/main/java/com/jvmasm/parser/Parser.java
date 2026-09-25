@@ -167,9 +167,27 @@ public final class Parser {
                 }
             }
             case ".throws" -> m.thrown.add(expectIdentOrDesc("exception class"));
-            default -> throw error("unsupported method directive '" + dir.text() + "' in Phase 1");
+            case ".catch" -> {
+                // .catch Type from L0 to L1 using L2
+                String type = expectIdentOrDesc("exception type");
+                expectIdentWord("from");
+                String from = expectIdentOrDesc("from label");
+                expectIdentWord("to");
+                String to = expectIdentOrDesc("to label");
+                expectIdentWord("using");
+                String handler = expectIdentOrDesc("handler label");
+                m.catches.add(new com.jvmasm.ast.CatchEntry(type, from, to, handler));
+            }
+            default -> throw error("unsupported method directive '" + dir.text() + "'");
         }
         expectEndOfLine();
+    }
+
+    private void expectIdentWord(String word) {
+        Token t = expect(TokenType.IDENT, word);
+        if (!t.text().equals(word)) {
+            throw error("expected '" + word + "', got '" + t.text() + "'");
+        }
     }
 
     private CodeItem parseInstruction() {
@@ -191,6 +209,13 @@ public final class Parser {
             }
         }
 
+        if (def == InstructionDef.TABLESWITCH) {
+            return parseTableSwitch(mnem.line());
+        }
+        if (def == InstructionDef.LOOKUPSWITCH) {
+            return parseLookupSwitch(mnem.line());
+        }
+
         List<String> operands = new ArrayList<>();
         OperandShape shape = wide
                 ? (def == InstructionDef.IINC ? OperandShape.IINC : OperandShape.LOCAL_U1)
@@ -199,8 +224,14 @@ public final class Parser {
         switch (shape) {
             case NONE -> { /* no operands */ }
             case BIPUSH, SIPUSH, LOCAL_U1, BRANCH, BRANCH_W, CLASS_REF, LDC, LDC_W, LDC2_W,
-                 FIELD_REF, METHOD_REF, NEWARRAY -> {
+                 METHOD_REF, NEWARRAY -> {
                 operands.add(expectOperandText());
+            }
+            case FIELD_REF -> {
+                operands.add(expectOperandText());
+                if (check(TokenType.IDENT) || check(TokenType.MNEMONIC) || check(TokenType.STRING)) {
+                    operands.add(advance().text());
+                }
             }
             case IINC -> {
                 operands.add(expectOperandText());
@@ -215,10 +246,61 @@ public final class Parser {
                 operands.add(expect(TokenType.INT, "dims").text());
             }
             case WIDE_PREFIX, RESERVED -> throw error("internal: unexpected shape " + shape);
-            case TABLESWITCH, LOOKUPSWITCH, INVOKEDYNAMIC ->
-                    throw error("opcode '" + def.mnemonic() + "' not implemented in Phase 1 parser");
+            case TABLESWITCH, LOOKUPSWITCH -> throw error("internal: switch handled above");
+            case INVOKEDYNAMIC ->
+                    throw error("opcode 'invokedynamic' not implemented yet");
         }
         return new InsnItem(def, wide, List.copyOf(operands), mnem.line());
+    }
+
+    private CodeItem parseTableSwitch(int line) {
+        // tableswitch default D low L high H { C0 C1 ... }
+        expectIdentWord("default");
+        String defLabel = expectOperandText();
+        expectIdentWord("low");
+        int low = parseIntToken(expect(TokenType.INT, "low"));
+        expectIdentWord("high");
+        int high = parseIntToken(expect(TokenType.INT, "high"));
+        expect(TokenType.LBRACE, "{");
+        List<String> cases = new ArrayList<>();
+        while (!check(TokenType.RBRACE)) {
+            if (check(TokenType.COMMA)) {
+                advance();
+                continue;
+            }
+            cases.add(expectOperandText());
+        }
+        expect(TokenType.RBRACE, "}");
+        int expected = high - low + 1;
+        if (cases.size() != expected) {
+            throw error("tableswitch expects " + expected + " labels, got " + cases.size());
+        }
+        return new com.jvmasm.ast.TableSwitchItem(defLabel, low, high, List.copyOf(cases), line);
+    }
+
+    private CodeItem parseLookupSwitch(int line) {
+        // lookupswitch default D { K -> L, ... }
+        expectIdentWord("default");
+        String defLabel = expectOperandText();
+        expect(TokenType.LBRACE, "{");
+        List<com.jvmasm.ast.LookupCase> cases = new ArrayList<>();
+        while (!check(TokenType.RBRACE)) {
+            if (check(TokenType.COMMA)) {
+                advance();
+                continue;
+            }
+            int key = parseIntToken(expect(TokenType.INT, "case key"));
+            expect(TokenType.ARROW, "->");
+            String label = expectOperandText();
+            cases.add(new com.jvmasm.ast.LookupCase(key, label));
+        }
+        expect(TokenType.RBRACE, "}");
+        for (int i = 1; i < cases.size(); i++) {
+            if (cases.get(i).key() <= cases.get(i - 1).key()) {
+                throw error("lookupswitch keys must be strictly ascending");
+            }
+        }
+        return new com.jvmasm.ast.LookupSwitchItem(defLabel, List.copyOf(cases), line);
     }
 
     private String expectOperandText() {

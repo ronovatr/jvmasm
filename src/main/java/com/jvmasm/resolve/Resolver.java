@@ -1,6 +1,6 @@
 package com.jvmasm.resolve;
 
-/** Placeholder for label fixup / stack-depth validation passes. */
+/** Placeholder kept for package stability; prefer {@link StackDepthChecker}. */
 public final class Resolver {
     private Resolver() {}
 }

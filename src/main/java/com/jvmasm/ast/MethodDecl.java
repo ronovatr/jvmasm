@@ -11,4 +11,5 @@ public final class MethodDecl {
     public int maxLocals = -1;
     public final List<String> thrown = new ArrayList<>();
     public final List<CodeItem> code = new ArrayList<>();
+    public final List<CatchEntry> catches = new ArrayList<>();
 }

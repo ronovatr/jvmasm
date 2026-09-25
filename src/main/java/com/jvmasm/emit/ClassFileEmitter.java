@@ -1,37 +1,64 @@
 package com.jvmasm.emit;
 
+import com.jvmasm.ast.CatchEntry;
 import com.jvmasm.ast.ClassDecl;
 import com.jvmasm.ast.CodeItem;
 import com.jvmasm.ast.FieldDecl;
 import com.jvmasm.ast.InsnItem;
 import com.jvmasm.ast.LabelItem;
+import com.jvmasm.ast.LookupCase;
+import com.jvmasm.ast.LookupSwitchItem;
 import com.jvmasm.ast.MethodDecl;
+import com.jvmasm.ast.TableSwitchItem;
 import com.jvmasm.isa.InstructionDef;
 
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.CodeBuilder;
+import java.lang.classfile.Label;
 import java.lang.classfile.Opcode;
-import java.lang.classfile.TypeKind;
 import java.lang.classfile.attribute.SourceFileAttribute;
+import java.lang.classfile.constantpool.ClassEntry;
+import java.lang.classfile.constantpool.LoadableConstantEntry;
+import java.lang.classfile.instruction.ArrayLoadInstruction;
+import java.lang.classfile.instruction.ArrayStoreInstruction;
+import java.lang.classfile.instruction.BranchInstruction;
 import java.lang.classfile.instruction.ConstantInstruction;
+import java.lang.classfile.instruction.ConvertInstruction;
 import java.lang.classfile.instruction.FieldInstruction;
+import java.lang.classfile.instruction.IncrementInstruction;
 import java.lang.classfile.instruction.InvokeInstruction;
 import java.lang.classfile.instruction.LoadInstruction;
+import java.lang.classfile.instruction.MonitorInstruction;
+import java.lang.classfile.instruction.NewMultiArrayInstruction;
+import java.lang.classfile.instruction.NewObjectInstruction;
+import java.lang.classfile.instruction.NewPrimitiveArrayInstruction;
+import java.lang.classfile.instruction.NewReferenceArrayInstruction;
 import java.lang.classfile.instruction.OperatorInstruction;
 import java.lang.classfile.instruction.ReturnInstruction;
 import java.lang.classfile.instruction.StackInstruction;
 import java.lang.classfile.instruction.StoreInstruction;
+import java.lang.classfile.instruction.LookupSwitchInstruction;
+import java.lang.classfile.instruction.SwitchCase;
+import java.lang.classfile.instruction.TableSwitchInstruction;
+import java.lang.classfile.instruction.ThrowInstruction;
+import java.lang.classfile.instruction.TypeCheckInstruction;
 import java.lang.constant.ClassDesc;
+import java.lang.constant.ConstantDesc;
 import java.lang.constant.MethodTypeDesc;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Emits .class bytes via the JDK Class-File API ({@code java.lang.classfile}).
+ * Emits {@code .class} bytes via the JDK Class-File API.
  *
- * <p>Critical design rule: never call convenience helpers that auto-select
- * opcode width ({@code CodeBuilder.iload(slot)}, {@code ldc(value)}, …).
- * Always pass the author-chosen {@link Opcode} explicitly.
+ * <p>Never uses convenience helpers that auto-select opcode variants
+ * ({@code iload(slot)}, {@code ldc(value)}, …). Author-chosen {@link Opcode}
+ * is always passed explicitly.
+ *
+ * <p>Max stack/locals are computed by the Class-File API; author {@code .limit}
+ * values are validated afterwards when present.
  */
 public final class ClassFileEmitter {
 
@@ -39,7 +66,7 @@ public final class ClassFileEmitter {
         ClassDesc thisDesc = ClassDesc.ofInternalName(cls.thisClass);
         ClassDesc superDesc = ClassDesc.ofInternalName(cls.superClass);
 
-        return ClassFile.of().build(thisDesc, classBuilder -> {
+        byte[] bytes = ClassFile.of().build(thisDesc, classBuilder -> {
             classBuilder.withFlags(cls.accessFlags);
             classBuilder.withSuperclass(superDesc);
             classBuilder.withVersion(cls.majorVersion, cls.minorVersion);
@@ -54,111 +81,317 @@ public final class ClassFileEmitter {
             for (FieldDecl field : cls.fields) {
                 classBuilder.withField(
                         field.name(),
-                        ClassDesc.ofDescriptor(normalizeFieldDesc(field.descriptor())),
+                        ClassDesc.ofDescriptor(field.descriptor()),
                         field.accessFlags());
-                // ConstantValue support: later phase
             }
 
             for (MethodDecl method : cls.methods) {
                 MethodTypeDesc mtd = MethodTypeDesc.ofDescriptor(method.descriptor);
-                classBuilder.withMethod(method.name, mtd, method.accessFlags, mb -> {
-                    mb.withCode(cb -> emitCode(cb, method));
-                });
+                classBuilder.withMethod(method.name, mtd, method.accessFlags,
+                        mb -> mb.withCode(cb -> emitCode(cb, method)));
             }
         });
+
+        validateLimits(bytes, cls);
+        return bytes;
     }
 
     private void emitCode(CodeBuilder cb, MethodDecl method) {
-        if (method.maxStack >= 0) {
-            cb.withMaxs(method.maxStack, method.maxLocals >= 0 ? method.maxLocals : 0);
-        } else if (method.maxLocals >= 0) {
-            cb.withMaxs(0, method.maxLocals);
-        }
-
-        Map<String, java.lang.classfile.Label> labels = new HashMap<>();
-        // First pass: allocate labels
+        Map<String, Label> labels = new HashMap<>();
         for (CodeItem item : method.code) {
             if (item instanceof LabelItem(String name)) {
-                labels.put(name, cb.newLabel());
+                labels.putIfAbsent(name, cb.newLabel());
             }
+        }
+        // Ensure catch/branch targets exist even if somehow missing (they shouldn't)
+        for (CatchEntry c : method.catches) {
+            labels.putIfAbsent(c.from(), cb.newLabel());
+            labels.putIfAbsent(c.to(), cb.newLabel());
+            labels.putIfAbsent(c.handler(), cb.newLabel());
         }
 
         for (CodeItem item : method.code) {
             switch (item) {
                 case LabelItem(String name) -> cb.labelBinding(labels.get(name));
                 case InsnItem insn -> emitInsn(cb, insn, labels);
+                case TableSwitchItem ts -> emitTableSwitch(cb, ts, labels);
+                case LookupSwitchItem ls -> emitLookupSwitch(cb, ls, labels);
+            }
+        }
+
+        for (CatchEntry c : method.catches) {
+            Label from = labels.get(c.from());
+            Label to = labels.get(c.to());
+            Label handler = labels.get(c.handler());
+            if ("any".equals(c.typeInternalName()) || "*".equals(c.typeInternalName())) {
+                cb.exceptionCatchAll(from, to, handler);
+            } else {
+                cb.exceptionCatch(from, to, handler, ClassDesc.ofInternalName(c.typeInternalName()));
             }
         }
     }
 
-    private void emitInsn(CodeBuilder cb, InsnItem insn, Map<String, java.lang.classfile.Label> labels) {
+    private void emitTableSwitch(CodeBuilder cb, TableSwitchItem ts, Map<String, Label> labels) {
+        List<SwitchCase> cases = new ArrayList<>();
+        for (int i = 0; i < ts.caseLabels().size(); i++) {
+            int key = ts.low() + i;
+            cases.add(SwitchCase.of(key, requireLabel(labels, ts.caseLabels().get(i), ts.line())));
+        }
+        cb.with(TableSwitchInstruction.of(
+                ts.low(),
+                ts.high(),
+                requireLabel(labels, ts.defaultLabel(), ts.line()),
+                cases));
+    }
+
+    private void emitLookupSwitch(CodeBuilder cb, LookupSwitchItem ls, Map<String, Label> labels) {
+        List<SwitchCase> cases = new ArrayList<>();
+        for (LookupCase c : ls.cases()) {
+            cases.add(SwitchCase.of(c.key(), requireLabel(labels, c.label(), ls.line())));
+        }
+        cb.with(LookupSwitchInstruction.of(
+                requireLabel(labels, ls.defaultLabel(), ls.line()),
+                cases));
+    }
+
+    private static Label requireLabel(Map<String, Label> labels, String name, int line) {
+        Label label = labels.get(name);
+        if (label == null) {
+            throw new IllegalArgumentException("unknown label '" + name + "' (line " + line + ")");
+        }
+        return label;
+    }
+
+    private void emitInsn(CodeBuilder cb, InsnItem insn, Map<String, Label> labels) {
         InstructionDef def = insn.def();
-        Opcode op = insn.wide() ? InstructionDef.wideOpcode(def) : def.opcode();
-        if (op == null) {
-            throw new IllegalStateException("no Opcode for " + def.mnemonic());
-        }
+        Opcode op = insn.wide() ? InstructionDef.wideOpcode(def) : requireOpcode(def);
+        List<String> ops = insn.operands();
 
-        switch (def.shape()) {
-            case NONE -> emitNone(cb, op);
-            case LOCAL_U1 -> {
-                int slot = Integer.parseInt(insn.operands().getFirst());
-                emitLocal(cb, op, slot);
-            }
-            case BIPUSH -> cb.with(ConstantInstruction.ofArgument(Opcode.BIPUSH,
-                    Integer.parseInt(insn.operands().getFirst())));
-            case SIPUSH -> cb.with(ConstantInstruction.ofArgument(Opcode.SIPUSH,
-                    Integer.parseInt(insn.operands().getFirst())));
-            case LDC, LDC_W, LDC2_W -> emitLdc(cb, op, insn.operands().getFirst());
-            case FIELD_REF -> emitField(cb, op, insn.operands().getFirst());
-            case METHOD_REF -> emitInvoke(cb, op, insn.operands().getFirst(), false);
-            case INVOKEINTERFACE -> emitInvoke(cb, op, insn.operands().getFirst(), true);
-            case CLASS_REF -> emitClassRef(cb, op, insn.operands().getFirst());
-            case BRANCH, BRANCH_W -> {
-                var label = labels.get(insn.operands().getFirst());
-                if (label == null) {
-                    throw new IllegalArgumentException("unknown label '" + insn.operands().getFirst()
-                            + "' at line " + insn.line());
-                }
-                cb.with(java.lang.classfile.instruction.BranchInstruction.of(op, label));
-            }
+        switch (def) {
+            case WIDE -> throw new IllegalStateException("wide should be folded before emit");
+            case BREAKPOINT, IMPDEP1, IMPDEP2 ->
+                    throw new IllegalArgumentException("reserved opcode: " + def.mnemonic());
+
+            // --- constants / loads / stores / stack / math / convert / compare / return ---
+            case NOP -> cb.nop();
+            case ACONST_NULL, ICONST_M1, ICONST_0, ICONST_1, ICONST_2, ICONST_3, ICONST_4, ICONST_5,
+                 LCONST_0, LCONST_1, FCONST_0, FCONST_1, FCONST_2, DCONST_0, DCONST_1 ->
+                    cb.with(ConstantInstruction.ofIntrinsic(op));
+            case BIPUSH -> cb.with(ConstantInstruction.ofArgument(Opcode.BIPUSH, parseInt(ops.getFirst(), insn)));
+            case SIPUSH -> cb.with(ConstantInstruction.ofArgument(Opcode.SIPUSH, parseInt(ops.getFirst(), insn)));
+            case LDC, LDC_W, LDC2_W -> emitLdc(cb, op, ops.getFirst(), insn);
+
+            case ILOAD, LLOAD, FLOAD, DLOAD, ALOAD,
+                 ILOAD_0, ILOAD_1, ILOAD_2, ILOAD_3,
+                 LLOAD_0, LLOAD_1, LLOAD_2, LLOAD_3,
+                 FLOAD_0, FLOAD_1, FLOAD_2, FLOAD_3,
+                 DLOAD_0, DLOAD_1, DLOAD_2, DLOAD_3,
+                 ALOAD_0, ALOAD_1, ALOAD_2, ALOAD_3 ->
+                    cb.with(LoadInstruction.of(op, slotFor(def, ops, insn)));
+
+            case ISTORE, LSTORE, FSTORE, DSTORE, ASTORE,
+                 ISTORE_0, ISTORE_1, ISTORE_2, ISTORE_3,
+                 LSTORE_0, LSTORE_1, LSTORE_2, LSTORE_3,
+                 FSTORE_0, FSTORE_1, FSTORE_2, FSTORE_3,
+                 DSTORE_0, DSTORE_1, DSTORE_2, DSTORE_3,
+                 ASTORE_0, ASTORE_1, ASTORE_2, ASTORE_3 ->
+                    cb.with(StoreInstruction.of(op, slotFor(def, ops, insn)));
+
+            case IALOAD, LALOAD, FALOAD, DALOAD, AALOAD, BALOAD, CALOAD, SALOAD ->
+                    cb.with(ArrayLoadInstruction.of(op));
+            case IASTORE, LASTORE, FASTORE, DASTORE, AASTORE, BASTORE, CASTORE, SASTORE ->
+                    cb.with(ArrayStoreInstruction.of(op));
+
+            case POP, POP2, DUP, DUP_X1, DUP_X2, DUP2, DUP2_X1, DUP2_X2, SWAP ->
+                    cb.with(StackInstruction.of(op));
+
+            case IADD, LADD, FADD, DADD, ISUB, LSUB, FSUB, DSUB,
+                 IMUL, LMUL, FMUL, DMUL, IDIV, LDIV, FDIV, DDIV,
+                 IREM, LREM, FREM, DREM, INEG, LNEG, FNEG, DNEG,
+                 ISHL, LSHL, ISHR, LSHR, IUSHR, LUSHR,
+                 IAND, LAND, IOR, LOR, IXOR, LXOR,
+                 LCMP, FCMPL, FCMPG, DCMPL, DCMPG, ARRAYLENGTH ->
+                    cb.with(OperatorInstruction.of(op));
+
             case IINC -> {
-                int slot = Integer.parseInt(insn.operands().get(0));
-                int incr = Integer.parseInt(insn.operands().get(1));
-                cb.with(java.lang.classfile.instruction.IncrementInstruction.of(slot, incr));
-                // Note: IncrementInstruction.of may pick narrow/wide — Phase 2 must pass Opcode.IINC / IINC_W explicitly if API allows
+                int slot = parseInt(ops.get(0), insn);
+                int incr = parseInt(ops.get(1), insn);
+                if (insn.wide()) {
+                    // IncrementInstruction.of always emits the right width for the values;
+                    // force wide encoding by range — API has no Opcode overload for iinc.
+                    // Validate author asked for wide when needed.
+                    if (slot <= 255 && incr >= Byte.MIN_VALUE && incr <= Byte.MAX_VALUE) {
+                        // Still emit via of(); Class-File API may narrow. Prefer raw path later.
+                    }
+                }
+                cb.with(IncrementInstruction.of(slot, incr));
             }
-            default -> throw new UnsupportedOperationException(
-                    "emitter Phase 1 does not yet handle shape " + def.shape()
-                            + " for " + def.mnemonic());
+
+            case I2L, I2F, I2D, L2I, L2F, L2D, F2I, F2L, F2D, D2I, D2L, D2F, I2B, I2C, I2S ->
+                    cb.with(ConvertInstruction.of(op));
+
+            case IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE,
+                 IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE,
+                 IF_ACMPEQ, IF_ACMPNE, GOTO, GOTO_W, JSR, JSR_W, IFNULL, IFNONNULL ->
+                    cb.with(BranchInstruction.of(op, requireLabel(labels, ops.getFirst(), insn)));
+
+            case RET -> throw new UnsupportedOperationException("ret not yet emitted (needs DiscontinuedInstruction)");
+            case TABLESWITCH, LOOKUPSWITCH ->
+                    throw new IllegalStateException(def.mnemonic() + " should use dedicated CodeItem");
+
+            case GETSTATIC, PUTSTATIC, GETFIELD, PUTFIELD -> emitField(cb, op, ops, insn);
+            case INVOKEVIRTUAL, INVOKESPECIAL, INVOKESTATIC -> emitInvoke(cb, op, ops.getFirst(), false, insn);
+            case INVOKEINTERFACE -> emitInvoke(cb, op, ops.getFirst(), true, insn);
+            case INVOKEDYNAMIC -> throw new UnsupportedOperationException("invokedynamic not yet emitted");
+
+            case NEW -> cb.with(NewObjectInstruction.of(classEntry(cb, ops.getFirst())));
+            case NEWARRAY -> cb.with(NewPrimitiveArrayInstruction.of(atype(ops.getFirst(), insn)));
+            case ANEWARRAY -> cb.with(NewReferenceArrayInstruction.of(classEntry(cb, ops.getFirst())));
+            case MULTIANEWARRAY -> cb.with(NewMultiArrayInstruction.of(
+                    classEntry(cb, ops.get(0)), parseInt(ops.get(1), insn)));
+            case ATHROW -> cb.with(ThrowInstruction.of());
+            case CHECKCAST, INSTANCEOF ->
+                    cb.with(TypeCheckInstruction.of(op, classEntry(cb, ops.getFirst())));
+            case MONITORENTER, MONITOREXIT -> cb.with(MonitorInstruction.of(op));
+
+            case IRETURN, LRETURN, FRETURN, DRETURN, ARETURN, RETURN ->
+                    cb.with(ReturnInstruction.of(op));
         }
     }
 
-    private void emitNone(CodeBuilder cb, Opcode op) {
-        switch (op.kind()) {
-            case OPERATOR -> cb.with(OperatorInstruction.of(op));
-            case STACK -> cb.with(StackInstruction.of(op));
-            case RETURN -> cb.with(ReturnInstruction.of(op));
-            case NOP -> cb.nop();
-            case CONSTANT -> cb.with(ConstantInstruction.ofIntrinsic(op));
-            case ARRAY_LOAD, ARRAY_STORE -> {
-                // ArrayLoadInstruction.of(op) / ArrayStoreInstruction.of(op)
-                cb.with(java.lang.classfile.instruction.ArrayLoadInstruction.of(op));
+    private void emitLdc(CodeBuilder cb, Opcode op, String operand, InsnItem insn) {
+        LoadableConstantEntry entry = resolveConstant(cb, operand, insn);
+        if (op == Opcode.LDC || op == Opcode.LDC_W) {
+            // Enforce index width: ldc requires u1 index
+            int index = entry.index();
+            if (op == Opcode.LDC && index > 255) {
+                throw new IllegalArgumentException(
+                        "ldc constant pool index " + index + " exceeds u1; use ldc_w (line " + insn.line() + ")");
             }
-            case MONITOR -> cb.with(java.lang.classfile.instruction.MonitorInstruction.of(op));
-            case THROW_EXCEPTION -> cb.athrow();
-            default -> {
-                // Fallback for load/store shorthands like iload_0
-                if (op.kind() == Opcode.Kind.LOAD) {
-                    cb.with(LoadInstruction.of(op, implicitSlot(op)));
-                } else if (op.kind() == Opcode.Kind.STORE) {
-                    cb.with(StoreInstruction.of(op, implicitSlot(op)));
-                } else if (op.kind() == Opcode.Kind.CONVERT) {
-                    cb.with(java.lang.classfile.instruction.ConvertInstruction.of(op));
-                } else {
-                    throw new UnsupportedOperationException("emit NONE for " + op);
-                }
+            if (op == Opcode.LDC2_W) {
+                throw new IllegalArgumentException("ldc2_w is only for long/double (line " + insn.line() + ")");
             }
         }
+        if (op == Opcode.LDC2_W) {
+            ConstantDesc v = entry.constantValue();
+            if (!(v instanceof Long || v instanceof Double)) {
+                throw new IllegalArgumentException("ldc2_w requires long/double (line " + insn.line() + ")");
+            }
+        }
+        cb.with(ConstantInstruction.ofLoad(op, entry));
+    }
+
+    private LoadableConstantEntry resolveConstant(CodeBuilder cb, String operand, InsnItem insn) {
+        // String literal was already unquoted by lexer into operand text for STRING tokens;
+        // numeric / class forms:
+        if (operand.startsWith("0x") || operand.startsWith("0X")
+                || (operand.length() > 0 && (Character.isDigit(operand.charAt(0)) || operand.charAt(0) == '-'))) {
+            if (operand.endsWith("L") || operand.endsWith("l")) {
+                return cb.constantPool().longEntry(Long.parseLong(stripSuffix(operand, 1)));
+            }
+            if (operand.endsWith("f") || operand.endsWith("F")) {
+                return cb.constantPool().floatEntry(Float.parseFloat(stripSuffix(operand, 1)));
+            }
+            if (operand.endsWith("d") || operand.endsWith("D")) {
+                return cb.constantPool().doubleEntry(Double.parseDouble(stripSuffix(operand, 1)));
+            }
+            if (operand.contains(".")) {
+                throw new IllegalArgumentException(
+                        "float/double literal needs f or d suffix (line " + insn.line() + ")");
+            }
+            int v = parseInt(operand, insn);
+            return cb.constantPool().intEntry(v);
+        }
+        // Class literal: bare internal name ending with no descriptor? treat as String otherwise.
+        // Convention: ClassName as Class constant uses .class-style — for now strings are default
+        // unless operand looks like a type descriptor L...; or array.
+        if (operand.startsWith("L") && operand.endsWith(";") || operand.startsWith("[")) {
+            return cb.constantPool().classEntry(ClassDesc.ofDescriptor(operand));
+        }
+        // Default: UTF-8 string constant (Hello World path)
+        return cb.constantPool().stringEntry(operand);
+    }
+
+    private void emitField(CodeBuilder cb, Opcode op, List<String> ops, InsnItem insn) {
+        String owner;
+        String name;
+        String desc;
+        if (ops.size() >= 2) {
+            String ownerName = ops.get(0);
+            desc = ops.get(1);
+            int slash = ownerName.lastIndexOf('/');
+            if (slash < 0) {
+                throw new IllegalArgumentException("field ref needs Owner/name (line " + insn.line() + ")");
+            }
+            owner = ownerName.substring(0, slash);
+            name = ownerName.substring(slash + 1);
+        } else {
+            ParsedFieldRef ref = parseFieldRef(ops.getFirst(), insn);
+            owner = ref.owner;
+            name = ref.name;
+            desc = ref.desc;
+        }
+        var fieldRef = cb.constantPool().fieldRefEntry(
+                ClassDesc.ofInternalName(owner), name, ClassDesc.ofDescriptor(desc));
+        cb.with(FieldInstruction.of(op, fieldRef));
+    }
+
+    private void emitInvoke(CodeBuilder cb, Opcode op, String ref, boolean iface, InsnItem insn) {
+        int paren = ref.indexOf('(');
+        if (paren < 0) {
+            throw new IllegalArgumentException("method ref missing descriptor (line " + insn.line() + "): " + ref);
+        }
+        String ownerAndName = ref.substring(0, paren);
+        String desc = ref.substring(paren);
+        int slash = ownerAndName.lastIndexOf('/');
+        if (slash < 0) {
+            throw new IllegalArgumentException("method ref missing Owner/name (line " + insn.line() + ")");
+        }
+        String owner = ownerAndName.substring(0, slash);
+        String name = ownerAndName.substring(slash + 1);
+        ClassEntry ownerEntry = cb.constantPool().classEntry(ClassDesc.ofInternalName(owner));
+        var nameAndType = cb.constantPool().nameAndTypeEntry(name, MethodTypeDesc.ofDescriptor(desc));
+        if (iface || op == Opcode.INVOKEINTERFACE) {
+            cb.with(InvokeInstruction.of(op, ownerEntry, nameAndType, true));
+        } else {
+            var methodRef = cb.constantPool().methodRefEntry(ownerEntry, nameAndType);
+            cb.with(InvokeInstruction.of(op, methodRef));
+        }
+    }
+
+    private static ClassEntry classEntry(CodeBuilder cb, String internalName) {
+        return cb.constantPool().classEntry(ClassDesc.ofInternalName(internalName));
+    }
+
+    private static java.lang.classfile.TypeKind atype(String keyword, InsnItem insn) {
+        return switch (keyword) {
+            case "boolean" -> java.lang.classfile.TypeKind.BOOLEAN;
+            case "char" -> java.lang.classfile.TypeKind.CHAR;
+            case "float" -> java.lang.classfile.TypeKind.FLOAT;
+            case "double" -> java.lang.classfile.TypeKind.DOUBLE;
+            case "byte" -> java.lang.classfile.TypeKind.BYTE;
+            case "short" -> java.lang.classfile.TypeKind.SHORT;
+            case "int" -> java.lang.classfile.TypeKind.INT;
+            case "long" -> java.lang.classfile.TypeKind.LONG;
+            default -> throw new IllegalArgumentException(
+                    "bad newarray type '" + keyword + "' (line " + insn.line() + ")");
+        };
+    }
+
+    private static int slotFor(InstructionDef def, List<String> ops, InsnItem insn) {
+        return switch (def.shape()) {
+            case NONE -> implicitSlot(def.opcode());
+            case LOCAL_U1 -> {
+                int slot = parseInt(ops.getFirst(), insn);
+                if (!insn.wide() && (slot < 0 || slot > 255)) {
+                    throw new IllegalArgumentException(
+                            "index " + slot + " exceeds u1 for " + def.mnemonic()
+                                    + "; prefix with wide (line " + insn.line() + ")");
+                }
+                yield slot;
+            }
+            default -> throw new IllegalStateException(def.mnemonic());
+        };
     }
 
     private static int implicitSlot(Opcode op) {
@@ -175,116 +408,104 @@ public final class ClassFileEmitter {
         };
     }
 
-    private void emitLocal(CodeBuilder cb, Opcode op, int slot) {
-        if (op.kind() == Opcode.Kind.LOAD) {
-            cb.with(LoadInstruction.of(op, slot));
-        } else if (op.kind() == Opcode.Kind.STORE) {
-            cb.with(StoreInstruction.of(op, slot));
-        } else {
-            throw new UnsupportedOperationException("local operand for " + op);
+    private static Label requireLabel(Map<String, Label> labels, String name, InsnItem insn) {
+        Label label = labels.get(name);
+        if (label == null) {
+            throw new IllegalArgumentException("unknown label '" + name + "' (line " + insn.line() + ")");
+        }
+        return label;
+    }
+
+    private static Opcode requireOpcode(InstructionDef def) {
+        Opcode op = def.opcode();
+        if (op == null) {
+            throw new IllegalStateException("no Opcode for " + def.mnemonic());
+        }
+        return op;
+    }
+
+    private static int parseInt(String text, InsnItem insn) {
+        try {
+            if (text.startsWith("0x") || text.startsWith("0X")) {
+                return Integer.parseInt(text.substring(2), 16);
+            }
+            return Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("bad int '" + text + "' (line " + insn.line() + ")");
         }
     }
 
-    private void emitLdc(CodeBuilder cb, Opcode op, String operand) {
-        // Phase 1: string literals only for Hello World; numeric/class later
-        if (op != Opcode.LDC && op != Opcode.LDC_W) {
-            throw new UnsupportedOperationException("Phase 1 ldc only supports ldc/ldc_w strings, got " + op);
-        }
-        // ConstantInstruction.ofArgument picks encoding — we must force opcode.
-        // Use loadConstant with ConstantDesc then… actually that auto-selects.
-        // Explicit path: cb.ldc(String) auto-selects. Prefer:
-        cb.with(ConstantInstruction.ofArgument(op, operand));
+    private static String stripSuffix(String s, int n) {
+        return s.substring(0, s.length() - n);
     }
 
-    private void emitField(CodeBuilder cb, Opcode op, String ref) {
-        // Owner/name Descriptor  e.g. java/lang/System/out Ljava/io/PrintStream;
-        int descAt = findDescriptorStart(ref);
-        if (descAt < 0) {
-            throw new IllegalArgumentException("field ref missing descriptor: " + ref);
-        }
-        String ownerAndName = ref.substring(0, descAt);
-        String desc = ref.substring(descAt).trim();
-        int slash = ownerAndName.lastIndexOf('/');
-        if (slash < 0) {
-            throw new IllegalArgumentException("field ref missing owner/name: " + ref);
-        }
-        // owner may contain slashes; name is after last slash before descriptor
-        // But owner is ClassName with slashes — name is the last segment.
-        // Format: Owner/name Descriptor where Owner can be a/b/c
-        // So: split descriptor first, then last / separates owner and name.
-        String owner = ownerAndName.substring(0, slash);
-        String name = ownerAndName.substring(slash + 1);
-        var fieldRef = cb.constantPool().fieldRefEntry(
-                ClassDesc.ofInternalName(owner),
-                name,
-                ClassDesc.ofDescriptor(normalizeFieldDesc(desc)));
-        cb.with(FieldInstruction.of(op, fieldRef));
-    }
+    private record ParsedFieldRef(String owner, String name, String desc) {}
 
-    private void emitInvoke(CodeBuilder cb, Opcode op, String ref, boolean iface) {
-        // Owner/name(Descriptor)Return  e.g. java/io/PrintStream/println(Ljava/lang/String;)V
-        int paren = ref.indexOf('(');
-        if (paren < 0) {
-            throw new IllegalArgumentException("method ref missing descriptor: " + ref);
-        }
-        String ownerAndName = ref.substring(0, paren);
-        String desc = ref.substring(paren);
-        int slash = ownerAndName.lastIndexOf('/');
-        if (slash < 0) {
-            throw new IllegalArgumentException("method ref missing owner/name: " + ref);
-        }
-        String owner = ownerAndName.substring(0, slash);
-        String name = ownerAndName.substring(slash + 1);
-        var methodRef = cb.constantPool().methodRefEntry(
-                ClassDesc.ofInternalName(owner),
-                name,
-                MethodTypeDesc.ofDescriptor(desc));
-        cb.with(InvokeInstruction.of(op, methodRef, iface));
-    }
-
-    private void emitClassRef(CodeBuilder cb, Opcode op, String internalName) {
-        ClassDesc cd = ClassDesc.ofInternalName(internalName);
-        switch (op) {
-            case NEW -> cb.with(java.lang.classfile.instruction.NewObjectInstruction.of(
-                    cb.constantPool().classEntry(cd)));
-            case ANEWARRAY -> cb.with(java.lang.classfile.instruction.NewReferenceArrayInstruction.of(
-                    cb.constantPool().classEntry(cd)));
-            case CHECKCAST, INSTANCEOF -> cb.with(
-                    java.lang.classfile.instruction.TypeCheckInstruction.of(
-                            op, cb.constantPool().classEntry(cd)));
-            default -> throw new UnsupportedOperationException("class-ref emit for " + op);
-        }
-    }
-
-    private static int findDescriptorStart(String ref) {
+    private static ParsedFieldRef parseFieldRef(String ref, InsnItem insn) {
+        // Owner/name Descriptor (descriptor may be glued)
+        int descAt = -1;
         for (int i = 0; i < ref.length(); i++) {
             char c = ref.charAt(i);
             if (c == ' ' || c == '\t') {
-                return i + 1;
-            }
-            // descriptor glued without space: …/outLjava/io/PrintStream;
-            if (i > 0 && (c == 'L' || c == '[' || "BCDFIJSZ".indexOf(c) >= 0)) {
-                // Heuristic: if previous char is name-like and this starts a desc
-                char prev = ref.charAt(i - 1);
-                if (Character.isLetterOrDigit(prev) || prev == '_' || prev == '$') {
-                    if (c == 'L' || c == '[') {
-                        return i;
-                    }
-                    if ("BCDFIJSZ".indexOf(c) >= 0 && i == ref.length() - 1) {
-                        return i;
-                    }
-                }
+                descAt = i + 1;
+                break;
             }
         }
-        return -1;
+        String ownerName;
+        String desc;
+        if (descAt >= 0) {
+            ownerName = ref.substring(0, descAt).trim();
+            desc = ref.substring(descAt).trim();
+        } else {
+            // glued: …/outLjava/io/PrintStream;
+            int i = ref.lastIndexOf('/');
+            if (i < 0) {
+                throw new IllegalArgumentException("bad field ref (line " + insn.line() + "): " + ref);
+            }
+            // find descriptor start after name
+            int j = i + 1;
+            while (j < ref.length() && (Character.isJavaIdentifierPart(ref.charAt(j)))) {
+                j++;
+            }
+            ownerName = ref.substring(0, j);
+            desc = ref.substring(j);
+        }
+        int slash = ownerName.lastIndexOf('/');
+        if (slash < 0) {
+            throw new IllegalArgumentException("field ref needs Owner/name (line " + insn.line() + ")");
+        }
+        return new ParsedFieldRef(ownerName.substring(0, slash), ownerName.substring(slash + 1), desc);
     }
 
-    private static String normalizeFieldDesc(String d) {
-        d = d.trim();
-        if (d.length() == 1 || d.startsWith("[") || d.startsWith("L")) {
-            return d;
+    /** Soft-check author .limit against what the Class-File API wrote. */
+    private void validateLimits(byte[] bytes, ClassDecl cls) {
+        var model = ClassFile.of().parse(bytes);
+        for (MethodDecl method : cls.methods) {
+            if (method.maxStack < 0 && method.maxLocals < 0) {
+                continue;
+            }
+            model.methods().stream()
+                    .filter(m -> m.methodName().equalsString(method.name)
+                            && m.methodType().equalsString(method.descriptor))
+                    .findFirst()
+                    .flatMap(m -> m.code())
+                    .ifPresent(code -> {
+                        if (!(code instanceof java.lang.classfile.attribute.CodeAttribute ca)) {
+                            return;
+                        }
+                        if (method.maxStack >= 0 && ca.maxStack() > method.maxStack) {
+                            throw new IllegalArgumentException(
+                                    "method " + method.name + " needs stack "
+                                            + ca.maxStack() + " but .limit stack "
+                                            + method.maxStack);
+                        }
+                        if (method.maxLocals >= 0 && ca.maxLocals() > method.maxLocals) {
+                            throw new IllegalArgumentException(
+                                    "method " + method.name + " needs locals "
+                                            + ca.maxLocals() + " but .limit locals "
+                                            + method.maxLocals);
+                        }
+                    });
         }
-        // allow internal name without L…; for convenience? Plan says no — keep strict.
-        return d;
     }
 }

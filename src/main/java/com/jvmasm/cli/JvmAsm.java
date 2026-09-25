@@ -1,7 +1,9 @@
 package com.jvmasm.cli;
 
 import com.jvmasm.Assembler;
+import com.jvmasm.disasm.Disassembler;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
@@ -9,6 +11,7 @@ import java.nio.file.Path;
  *
  * <pre>
  *   jvmasm assemble HelloWorld.jasm -o HelloWorld.class
+ *   jvmasm disassemble HelloWorld.class -o HelloWorld.jasm
  * </pre>
  */
 public final class JvmAsm {
@@ -19,6 +22,7 @@ public final class JvmAsm {
         }
         switch (args[0]) {
             case "assemble" -> assemble(args);
+            case "disassemble" -> disassemble(args);
             case "help", "-h", "--help" -> usage();
             default -> {
                 System.err.println("unknown command: " + args[0]);
@@ -63,11 +67,49 @@ public final class JvmAsm {
         System.out.println("wrote " + output.toAbsolutePath());
     }
 
+    private static void disassemble(String[] args) throws Exception {
+        Path input = null;
+        Path output = null;
+        for (int i = 1; i < args.length; i++) {
+            switch (args[i]) {
+                case "-o", "--output" -> {
+                    if (i + 1 >= args.length) {
+                        die("missing path after " + args[i]);
+                    }
+                    output = Path.of(args[++i]);
+                }
+                default -> {
+                    if (args[i].startsWith("-")) {
+                        die("unknown option: " + args[i]);
+                    }
+                    if (input != null) {
+                        die("unexpected argument: " + args[i]);
+                    }
+                    input = Path.of(args[i]);
+                }
+            }
+        }
+        if (input == null) {
+            die("disassemble requires an input .class file");
+        }
+        String text = new Disassembler().disassemble(Files.readAllBytes(input));
+        if (output == null) {
+            System.out.print(text);
+        } else {
+            if (output.getParent() != null) {
+                Files.createDirectories(output.getParent());
+            }
+            Files.writeString(output, text);
+            System.out.println("wrote " + output.toAbsolutePath());
+        }
+    }
+
     private static void usage() {
         System.out.println("""
                 jvmasm — historical-mnemonic JVM bytecode assembler
                 Usage:
                   jvmasm assemble <file.jasm> [-o <file.class>]
+                  jvmasm disassemble <file.class> [-o <file.jasm>]
                 """);
     }
 
