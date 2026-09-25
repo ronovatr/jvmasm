@@ -1,0 +1,305 @@
+package com.jvmasm.parser;
+
+import com.jvmasm.ast.ClassDecl;
+import com.jvmasm.ast.CodeItem;
+import com.jvmasm.ast.FieldDecl;
+import com.jvmasm.ast.InsnItem;
+import com.jvmasm.ast.LabelItem;
+import com.jvmasm.ast.MethodDecl;
+import com.jvmasm.isa.InstructionDef;
+import com.jvmasm.isa.OperandShape;
+import com.jvmasm.lexer.Token;
+import com.jvmasm.lexer.TokenType;
+import com.jvmasm.util.AccessFlags;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * Phase-1 parser: {@code .class}/{@code .super}/{@code .method}/{@code .limit}
+ * plus a Phase-1 opcode subset. Additional directives/opcodes are rejected clearly.
+ */
+public final class Parser {
+    private final List<Token> tokens;
+    private int i;
+
+    public Parser(List<Token> tokens) {
+        this.tokens = tokens;
+    }
+
+    public ClassDecl parseClass() {
+        ClassDecl cls = new ClassDecl();
+        skipNewlines();
+        while (!check(TokenType.EOF)) {
+            if (check(TokenType.DIRECTIVE)) {
+                parseDirective(cls);
+            } else {
+                throw error("expected directive, got " + peek());
+            }
+            skipNewlines();
+        }
+        if (cls.thisClass == null) {
+            throw new ParseException("missing .class directive", 1, 1);
+        }
+        if (cls.superClass == null) {
+            cls.superClass = "java/lang/Object";
+        }
+        return cls;
+    }
+
+    private void parseDirective(ClassDecl cls) {
+        Token dir = advance();
+        switch (dir.text()) {
+            case ".class" -> parseClassHeader(cls);
+            case ".super" -> cls.superClass = expectIdentOrDesc("superclass name");
+            case ".implements" -> cls.interfaces.add(expectIdentOrDesc("interface name"));
+            case ".source" -> cls.sourceFile = expect(TokenType.STRING, "source file string").text();
+            case ".version" -> {
+                cls.majorVersion = parseIntToken(expect(TokenType.INT, "major version"));
+                if (check(TokenType.INT)) {
+                    cls.minorVersion = parseIntToken(advance());
+                }
+            }
+            case ".field" -> cls.fields.add(parseField());
+            case ".method" -> cls.methods.add(parseMethod());
+            default -> throw error("unsupported directive '" + dir.text() + "' in Phase 1");
+        }
+        expectEndOfLine();
+    }
+
+    private void parseClassHeader(ClassDecl cls) {
+        Set<String> flags = new LinkedHashSet<>();
+        while (check(TokenType.IDENT) && isAccessKeyword(peek().text())) {
+            flags.add(advance().text());
+        }
+        cls.accessFlags = AccessFlags.parse(flags, AccessFlags.Kind.CLASS);
+        cls.thisClass = expectIdentOrDesc("class name");
+    }
+
+    private FieldDecl parseField() {
+        Set<String> flags = new LinkedHashSet<>();
+        while (check(TokenType.IDENT) && isAccessKeyword(peek().text())) {
+            flags.add(advance().text());
+        }
+        // Jasmin-ish: .field [flags] Descriptor name  OR  .field [flags] name Descriptor
+        // Plan example: .field private static I counter
+        String a = expectIdentOrDesc("field descriptor or name");
+        String b = expectIdentOrDesc("field name or descriptor");
+        String descriptor;
+        String name;
+        if (looksLikeDescriptor(a)) {
+            descriptor = a;
+            name = b;
+        } else {
+            name = a;
+            descriptor = b;
+        }
+        String constant = null;
+        if (match(TokenType.EQUALS)) {
+            Token v = advance();
+            constant = v.text();
+        }
+        return new FieldDecl(AccessFlags.parse(flags, AccessFlags.Kind.FIELD), name, descriptor, constant);
+    }
+
+    private MethodDecl parseMethod() {
+        MethodDecl m = new MethodDecl();
+        Set<String> flags = new LinkedHashSet<>();
+        while (check(TokenType.IDENT) && isAccessKeyword(peek().text())) {
+            flags.add(advance().text());
+        }
+        m.accessFlags = AccessFlags.parse(flags, AccessFlags.Kind.METHOD);
+        // name(descriptor)Return — often one IDENT token from lexer
+        String sig = expectIdentOrDesc("method signature");
+        int paren = sig.indexOf('(');
+        if (paren < 0) {
+            m.name = sig;
+            m.descriptor = expectIdentOrDesc("method descriptor");
+        } else {
+            m.name = sig.substring(0, paren);
+            m.descriptor = sig.substring(paren);
+        }
+        expectEndOfLine();
+        skipNewlines();
+
+        while (!check(TokenType.EOF)) {
+            if (check(TokenType.DIRECTIVE) && peek().text().equals(".end")) {
+                advance();
+                Token what = expect(TokenType.IDENT, "method");
+                if (!what.text().equals("method")) {
+                    throw error("expected '.end method'");
+                }
+                expectEndOfLine();
+                return m;
+            }
+            if (check(TokenType.DIRECTIVE)) {
+                parseMethodDirective(m);
+            } else if (check(TokenType.LABEL_DEF)) {
+                m.code.add(new LabelItem(advance().text()));
+                expectEndOfLine();
+            } else if (check(TokenType.MNEMONIC)) {
+                m.code.add(parseInstruction());
+                expectEndOfLine();
+            } else if (check(TokenType.NEWLINE)) {
+                advance();
+            } else {
+                throw error("unexpected token in method body: " + peek());
+            }
+            skipNewlines();
+        }
+        throw error("unclosed .method (missing .end method)");
+    }
+
+    private void parseMethodDirective(MethodDecl m) {
+        Token dir = advance();
+        switch (dir.text()) {
+            case ".limit" -> {
+                Token what = expect(TokenType.IDENT, "stack or locals");
+                int n = parseIntToken(expect(TokenType.INT, "limit value"));
+                if (what.text().equals("stack")) {
+                    m.maxStack = n;
+                } else if (what.text().equals("locals")) {
+                    m.maxLocals = n;
+                } else {
+                    throw error("expected .limit stack|locals");
+                }
+            }
+            case ".throws" -> m.thrown.add(expectIdentOrDesc("exception class"));
+            default -> throw error("unsupported method directive '" + dir.text() + "' in Phase 1");
+        }
+        expectEndOfLine();
+    }
+
+    private CodeItem parseInstruction() {
+        Token mnem = advance();
+        InstructionDef def = InstructionDef.lookup(mnem.text())
+                .orElseThrow(() -> error("unknown mnemonic '" + mnem.text() + "'"));
+        if (def.isReserved()) {
+            throw error("reserved opcode '" + def.mnemonic() + "' is not legal in class files");
+        }
+
+        boolean wide = false;
+        if (def.isWidePrefix()) {
+            wide = true;
+            Token next = expect(TokenType.MNEMONIC, "opcode after wide");
+            def = InstructionDef.lookup(next.text())
+                    .orElseThrow(() -> error("unknown mnemonic after wide: '" + next.text() + "'"));
+            if (!def.isWidenable()) {
+                throw error("'" + def.mnemonic() + "' cannot follow wide");
+            }
+        }
+
+        List<String> operands = new ArrayList<>();
+        OperandShape shape = wide
+                ? (def == InstructionDef.IINC ? OperandShape.IINC : OperandShape.LOCAL_U1)
+                : def.shape();
+
+        switch (shape) {
+            case NONE -> { /* no operands */ }
+            case BIPUSH, SIPUSH, LOCAL_U1, BRANCH, BRANCH_W, CLASS_REF, LDC, LDC_W, LDC2_W,
+                 FIELD_REF, METHOD_REF, NEWARRAY -> {
+                operands.add(expectOperandText());
+            }
+            case IINC -> {
+                operands.add(expectOperandText());
+                operands.add(expectOperandText());
+            }
+            case INVOKEINTERFACE -> {
+                operands.add(expectOperandText());
+                operands.add(expect(TokenType.INT, "argcount").text());
+            }
+            case MULTIANEWARRAY -> {
+                operands.add(expectOperandText());
+                operands.add(expect(TokenType.INT, "dims").text());
+            }
+            case WIDE_PREFIX, RESERVED -> throw error("internal: unexpected shape " + shape);
+            case TABLESWITCH, LOOKUPSWITCH, INVOKEDYNAMIC ->
+                    throw error("opcode '" + def.mnemonic() + "' not implemented in Phase 1 parser");
+        }
+        return new InsnItem(def, wide, List.copyOf(operands), mnem.line());
+    }
+
+    private String expectOperandText() {
+        if (check(TokenType.IDENT) || check(TokenType.STRING) || check(TokenType.INT)
+                || check(TokenType.FLOAT) || check(TokenType.MNEMONIC)) {
+            return advance().text();
+        }
+        throw error("expected operand, got " + peek());
+    }
+
+    private void expectEndOfLine() {
+        if (check(TokenType.NEWLINE) || check(TokenType.EOF)) {
+            return;
+        }
+        throw error("expected end of line, got " + peek());
+    }
+
+    private void skipNewlines() {
+        while (check(TokenType.NEWLINE)) {
+            advance();
+        }
+    }
+
+    private boolean isAccessKeyword(String s) {
+        return switch (s) {
+            case "public", "private", "protected", "static", "final", "synchronized",
+                 "native", "abstract", "interface", "volatile", "transient", "synthetic",
+                 "enum", "bridge", "varargs", "strict", "annotation", "super" -> true;
+            default -> false;
+        };
+    }
+
+    private boolean looksLikeDescriptor(String s) {
+        return s.startsWith("[") || s.startsWith("L") || s.length() == 1
+                && "BCDFIJSZ".indexOf(s.charAt(0)) >= 0;
+    }
+
+    private int parseIntToken(Token t) {
+        String text = t.text();
+        if (text.startsWith("0x") || text.startsWith("0X")) {
+            return Integer.parseInt(text.substring(2), 16);
+        }
+        return Integer.parseInt(text);
+    }
+
+    private String expectIdentOrDesc(String what) {
+        if (check(TokenType.IDENT) || check(TokenType.MNEMONIC)) {
+            return advance().text();
+        }
+        throw error("expected " + what + ", got " + peek());
+    }
+
+    private Token expect(TokenType type, String what) {
+        if (check(type)) {
+            return advance();
+        }
+        throw error("expected " + what + " (" + type + "), got " + peek());
+    }
+
+    private boolean match(TokenType type) {
+        if (check(type)) {
+            advance();
+            return true;
+        }
+        return false;
+    }
+
+    private boolean check(TokenType type) {
+        return peek().type() == type;
+    }
+
+    private Token peek() {
+        return tokens.get(i);
+    }
+
+    private Token advance() {
+        return tokens.get(i++);
+    }
+
+    private ParseException error(String msg) {
+        Token t = peek();
+        return new ParseException(msg, t.line(), t.column());
+    }
+}
