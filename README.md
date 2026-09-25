@@ -23,6 +23,9 @@ See `jvm-word-assembler-dev-plan.md` for the full design.
 java -cp out HelloWorld
 
 ./gradlew run --args="disassemble out/HelloWorld.class"
+
+# Require explicit .stack at every branch/handler target:
+./gradlew run --args="assemble examples/StackBranchDemo.jasm --strict-stack -o out/StackBranchDemo.class"
 ```
 
 ## Examples
@@ -36,6 +39,12 @@ java -cp out HelloWorld
 | `examples/CatchDemo.jasm` | `.catch`, handler frame, `.line` / `.var` |
 | `examples/ConstFieldDemo.jasm` | field `ConstantValue` (`= 42`) |
 | `examples/IndyDemo.jasm` | `.bootstrap` + `invokedynamic` |
+| `examples/SwitchDemo.jasm` | `tableswitch` |
+| `examples/LookupDemo.jasm` | `lookupswitch` |
+| `examples/ArrayDemo.jasm` | `newarray` / `iaload` / `iastore` |
+| `examples/OpcodeDemo.jasm` | exact `iload_0` (not `iload 0`) |
+| `examples/ThrowsDemo.jasm` | `.throws` + catch `IOException` |
+| `examples/WideDemo.jasm` | `wide iinc` / `wide iload` |
 
 ## `.stack` frames
 
@@ -48,7 +57,7 @@ Lelse:
 
 Types: `top` `int` `float` `long` `double` `null` `uninitializedThis`, `uninitialized L`, or a class/array descriptor.
 
-Without `.stack`, stack maps are still auto-generated (convenient while learning).
+Without `.stack`, stack maps are still auto-generated (convenient while learning). Pass `--strict-stack` to require frames at every branch/handler target.
 
 ## `invokedynamic`
 
@@ -61,5 +70,6 @@ invokedynamic makeConcat()Ljava/lang/String; B0
 ## Status
 
 - Full historical ISA table, assembler, disassembler, round-trip tests
-- Branches, switches, `.catch`, `.stack`, `.line`, `.var`, ConstantValue, **invokedynamic**
-- Still open: strict “always require `.stack`” mode, richer bootstrap round-trip in disasm
+- Branches, switches, `.catch`, `.throws`, `.stack`, `.line`, `.var`, ConstantValue, invokedynamic + `.bootstrap`
+- `--strict-stack` / `--no-verify` CLI flags; CFG stack-depth checker (including exception handlers)
+- Disassembler emits `.bootstrap`, `.throws`, and exact opcode mnemonics

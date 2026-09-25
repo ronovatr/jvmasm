@@ -1,5 +1,6 @@
 package com.jvmasm.emit;
 
+import com.jvmasm.AssembleOptions;
 import com.jvmasm.ast.BootstrapDecl;
 import com.jvmasm.ast.CatchEntry;
 import com.jvmasm.ast.ClassDecl;
@@ -21,6 +22,7 @@ import java.lang.classfile.CodeBuilder;
 import java.lang.classfile.Label;
 import java.lang.classfile.Opcode;
 import java.lang.classfile.attribute.ConstantValueAttribute;
+import java.lang.classfile.attribute.ExceptionsAttribute;
 import java.lang.classfile.attribute.SourceFileAttribute;
 import java.lang.classfile.attribute.StackMapFrameInfo;
 import java.lang.classfile.attribute.StackMapTableAttribute;
@@ -74,11 +76,22 @@ import java.util.stream.Collectors;
  */
 public final class ClassFileEmitter {
 
+    private final AssembleOptions options;
+
+    public ClassFileEmitter() {
+        this(AssembleOptions.defaults());
+    }
+
+    public ClassFileEmitter(AssembleOptions options) {
+        this.options = options;
+    }
+
     public byte[] emit(ClassDecl cls) {
         ClassDesc thisDesc = ClassDesc.ofInternalName(cls.thisClass);
         ClassDesc superDesc = ClassDesc.ofInternalName(cls.superClass);
 
-        boolean manualStacks = cls.methods.stream().anyMatch(this::hasManualStacks);
+        boolean manualStacks = options.strictStack()
+                || cls.methods.stream().anyMatch(this::hasManualStacks);
         ClassFile cf = manualStacks
                 ? ClassFile.of(ClassFile.StackMapsOption.DROP_STACK_MAPS)
                 : ClassFile.of();
@@ -115,15 +128,24 @@ public final class ClassFileEmitter {
 
             for (MethodDecl method : cls.methods) {
                 MethodTypeDesc mtd = MethodTypeDesc.ofDescriptor(method.descriptor);
-                classBuilder.withMethod(method.name, mtd, method.accessFlags,
-                        mb -> mb.withCode(cb -> emitCode(cb, method, manualStacks, bootstraps)));
+                classBuilder.withMethod(method.name, mtd, method.accessFlags, mb -> {
+                    if (!method.thrown.isEmpty()) {
+                        mb.with(ExceptionsAttribute.ofSymbols(
+                                method.thrown.stream()
+                                        .map(ClassDesc::ofInternalName)
+                                        .toArray(ClassDesc[]::new)));
+                    }
+                    mb.withCode(cb -> emitCode(cb, method, manualStacks, bootstraps, cls.majorVersion));
+                });
             }
         });
 
         validateLimits(bytes, cls);
-        List<VerifyError> errors = cf.verify(bytes);
-        if (!errors.isEmpty()) {
-            throw new IllegalArgumentException("class failed verification: " + errors.getFirst());
+        if (options.verify()) {
+            List<VerifyError> errors = cf.verify(bytes);
+            if (!errors.isEmpty()) {
+                throw new IllegalArgumentException("class failed verification: " + errors.getFirst());
+            }
         }
         return bytes;
     }
@@ -136,7 +158,8 @@ public final class ClassFileEmitter {
             CodeBuilder cb,
             MethodDecl method,
             boolean manualStacks,
-            Map<String, BootstrapDecl> bootstraps) {
+            Map<String, BootstrapDecl> bootstraps,
+            int majorVersion) {
         Map<String, Label> labels = new HashMap<>();
         for (CodeItem item : method.code) {
             if (item instanceof LabelItem(String name)) {
@@ -172,7 +195,7 @@ public final class ClassFileEmitter {
                         ClassDesc.ofDescriptor(v.descriptor()),
                         requireLabel(labels, v.fromLabel(), v.line()),
                         requireLabel(labels, v.toLabel(), v.line()));
-                case InsnItem insn -> emitInsn(cb, insn, labels, bootstraps);
+                case InsnItem insn -> emitInsn(cb, insn, labels, bootstraps, majorVersion);
                 case TableSwitchItem ts -> emitTableSwitch(cb, ts, labels);
                 case LookupSwitchItem ls -> emitLookupSwitch(cb, ls, labels);
             }
@@ -266,7 +289,8 @@ public final class ClassFileEmitter {
             CodeBuilder cb,
             InsnItem insn,
             Map<String, Label> labels,
-            Map<String, BootstrapDecl> bootstraps) {
+            Map<String, BootstrapDecl> bootstraps,
+            int majorVersion) {
         InstructionDef def = insn.def();
         Opcode op = insn.wide() ? InstructionDef.wideOpcode(def) : requireOpcode(def);
         List<String> ops = insn.operands();
@@ -339,9 +363,15 @@ public final class ClassFileEmitter {
                  IF_ACMPEQ, IF_ACMPNE, GOTO, GOTO_W, IFNULL, IFNONNULL ->
                     cb.with(BranchInstruction.of(op, requireLabel(labels, ops.getFirst(), insn)));
 
-            case JSR, JSR_W -> cb.with(DiscontinuedInstruction.JsrInstruction.of(
-                    op, requireLabel(labels, ops.getFirst(), insn)));
-            case RET -> cb.with(DiscontinuedInstruction.RetInstruction.of(op, parseInt(ops.getFirst(), insn)));
+            case JSR, JSR_W -> {
+                requireLegacySubroutines(majorVersion, insn);
+                cb.with(DiscontinuedInstruction.JsrInstruction.of(
+                        op, requireLabel(labels, ops.getFirst(), insn)));
+            }
+            case RET -> {
+                requireLegacySubroutines(majorVersion, insn);
+                cb.with(DiscontinuedInstruction.RetInstruction.of(op, parseInt(ops.getFirst(), insn)));
+            }
             case TABLESWITCH, LOOKUPSWITCH ->
                     throw new IllegalStateException(def.mnemonic() + " should use dedicated CodeItem");
 
@@ -440,6 +470,16 @@ public final class ClassFileEmitter {
         var fieldRef = cb.constantPool().fieldRefEntry(
                 ClassDesc.ofInternalName(owner), name, ClassDesc.ofDescriptor(desc));
         cb.with(FieldInstruction.of(op, fieldRef));
+    }
+
+    private static void requireLegacySubroutines(int majorVersion, InsnItem insn) {
+        // jsr/ret illegal in class files with major version ≥ 51 (Java 7+)
+        if (majorVersion >= 51) {
+            throw new IllegalArgumentException(
+                    insn.def().mnemonic() + " is illegal for class major version "
+                            + majorVersion + " (≥ 51); use .version 50 or lower (line "
+                            + insn.line() + ")");
+        }
     }
 
     private void emitInvokeDynamic(

@@ -46,6 +46,11 @@ public final class StackDepthChecker {
         Set<Block> work = new HashSet<>();
         work.add(blocks.getFirst());
 
+        // Exception handlers enter with the thrown object on the stack (depth 1).
+        for (var c : method.catches) {
+            enqueue(work, byLabel, labelDepth, c.handler(), 1, method);
+        }
+
         while (!work.isEmpty()) {
             Block b = work.iterator().next();
             work.remove(b);
@@ -242,12 +247,17 @@ public final class StackDepthChecker {
             case INVOKEVIRTUAL, INVOKESPECIAL, INVOKEINTERFACE -> invokeDelta(insn, true);
             case INVOKESTATIC -> invokeDelta(insn, false);
             case INVOKEDYNAMIC -> invokeDynamicDelta(insn);
-            case NEW, ANEWARRAY, NEWARRAY -> +1;
+            case NEW -> +1;
+            case ANEWARRAY, NEWARRAY -> 0; // pop count, push array ref
             case ATHROW -> -1;
             case RETURN -> 0;
             case GOTO, GOTO_W, JSR, JSR_W -> 0;
             case IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE,
                  IF_ACMPEQ, IF_ACMPNE -> -2;
+            case IALOAD, FALOAD, AALOAD, BALOAD, CALOAD, SALOAD -> -1;
+            case LALOAD, DALOAD -> 0;
+            case IASTORE, FASTORE, AASTORE, BASTORE, CASTORE, SASTORE -> -3;
+            case LASTORE, DASTORE -> -4;
             default -> 0;
         };
         return depth + delta;

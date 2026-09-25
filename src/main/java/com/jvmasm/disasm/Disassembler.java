@@ -68,6 +68,39 @@ public final class Disassembler {
                 out.append(".source \"").append(escape(sf.sourceFile().stringValue())).append("\"\n"));
         out.append('\n');
 
+        java.util.Map<Integer, String> bsmNames = new java.util.LinkedHashMap<>();
+        cm.findAttribute(Attributes.bootstrapMethods()).ifPresent(bsms -> {
+            int i = 0;
+            for (var entry : bsms.bootstrapMethods()) {
+                String name = "B" + i++;
+                bsmNames.put(entry.bsmIndex(), name);
+                var mh = entry.bootstrapMethod().asSymbol();
+                out.append(".bootstrap ").append(name).append(' ');
+                out.append(switch (mh.kind()) {
+                    case STATIC -> "invokestatic";
+                    case VIRTUAL -> "invokevirtual";
+                    case SPECIAL -> "invokespecial";
+                    case INTERFACE_VIRTUAL -> "invokeinterface";
+                    case INTERFACE_STATIC -> "interface_static";
+                    case INTERFACE_SPECIAL -> "interface_special";
+                    case CONSTRUCTOR -> "newInvokeSpecial";
+                    case GETTER -> "getfield";
+                    case SETTER -> "putfield";
+                    case STATIC_GETTER -> "getstatic";
+                    case STATIC_SETTER -> "putstatic";
+                });
+                out.append(' ').append(internalName(mh.owner())).append('/').append(mh.methodName());
+                out.append(mh.lookupDescriptor());
+                for (var arg : entry.arguments()) {
+                    out.append(' ').append(formatConstant(arg.constantValue()));
+                }
+                out.append('\n');
+            }
+            if (!bsms.bootstrapMethods().isEmpty()) {
+                out.append('\n');
+            }
+        });
+
         for (FieldModel field : cm.fields()) {
             out.append(".field");
             appendFlags(out, field.flags().flagsMask(), false);
@@ -87,6 +120,12 @@ public final class Disassembler {
             out.append(' ').append(method.methodName().stringValue())
                     .append(method.methodType().stringValue()).append('\n');
 
+            method.findAttribute(Attributes.exceptions()).ifPresent(ex -> {
+                for (var e : ex.exceptions()) {
+                    out.append("    .throws ").append(e.asInternalName()).append('\n');
+                }
+            });
+
             Optional<CodeAttribute> codeAttr = method.code()
                     .filter(CodeAttribute.class::isInstance)
                     .map(CodeAttribute.class::cast);
@@ -94,14 +133,14 @@ public final class Disassembler {
                 CodeAttribute code = codeAttr.get();
                 out.append("    .limit stack ").append(code.maxStack()).append('\n');
                 out.append("    .limit locals ").append(code.maxLocals()).append('\n');
-                printCode(out, code);
+                printCode(out, code, bsmNames);
             }
             out.append(".end method\n\n");
         }
         return out.toString();
     }
 
-    private void printCode(StringBuilder out, CodeAttribute code) {
+    private void printCode(StringBuilder out, CodeAttribute code, Map<Integer, String> bsmNames) {
         Map<Label, String> labelNames = new LinkedHashMap<>();
         java.util.concurrent.atomic.AtomicInteger labelCounter =
                 new java.util.concurrent.atomic.AtomicInteger();
@@ -179,8 +218,17 @@ public final class Disassembler {
             if (!(el instanceof Instruction insn)) {
                 continue;
             }
-            out.append("    ").append(formatInstruction(insn, labelNames)).append('\n');
+            out.append("    ").append(formatInstruction(insn, labelNames, bsmNames)).append('\n');
         }
+    }
+
+    private static String internalName(java.lang.constant.ClassDesc cd) {
+        if (cd.isClassOrInterface()) {
+            return cd.packageName().isEmpty()
+                    ? cd.displayName()
+                    : cd.packageName().replace('.', '/') + "/" + cd.displayName();
+        }
+        return cd.descriptorString();
     }
 
     private static String formatVerificationType(
@@ -203,7 +251,8 @@ public final class Disassembler {
         };
     }
 
-    private String formatInstruction(Instruction insn, Map<Label, String> labels) {
+    private String formatInstruction(
+            Instruction insn, Map<Label, String> labels, Map<Integer, String> bsmNames) {
         Opcode op = insn.opcode();
         String mnem = mnemonicFor(op);
 
@@ -242,10 +291,13 @@ public final class Disassembler {
             case TableSwitchInstruction ts -> formatTableSwitch(ts, labels);
             case LookupSwitchInstruction ls -> formatLookupSwitch(ls, labels);
             case InvokeDynamicInstruction idi -> {
-                String bsm = formatBootstrap(idi);
+                int idx = idi.invokedynamic().bootstrap().bsmIndex();
+                String bsm = bsmNames.getOrDefault(idx, "B" + idx);
                 yield "invokedynamic " + idi.name().stringValue() + idi.type().stringValue()
-                        + " ; bootstrap " + bsm;
+                        + " " + bsm;
             }
+            case DiscontinuedInstruction.JsrInstruction jsr ->
+                    mnemonicFor(jsr.opcode()) + " " + labels.get(jsr.target());
             case DiscontinuedInstruction.RetInstruction ret -> {
                 if (ret.opcode() == Opcode.RET_W) {
                     yield "wide ret " + ret.slot();
@@ -254,16 +306,6 @@ public final class Disassembler {
             }
             default -> mnem + " ; TODO unhandled " + insn.getClass().getSimpleName();
         };
-    }
-
-    private static String formatBootstrap(InvokeDynamicInstruction idi) {
-        var mh = idi.bootstrapMethod();
-        StringBuilder sb = new StringBuilder(mh.methodName());
-        sb.append(mh.lookupDescriptor());
-        for (var arg : idi.bootstrapArgs()) {
-            sb.append(' ').append(formatConstant(arg));
-        }
-        return sb.toString();
     }
 
     private static String formatLoadStore(String mnem, Opcode op, int slot) {

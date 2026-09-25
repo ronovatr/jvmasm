@@ -1,0 +1,36 @@
+; tableswitch demo — print day name index for 0..2 else "other"
+.class public SwitchDemo
+.super java/lang/Object
+
+.method public static main([Ljava/lang/String;)V
+    .limit stack 2
+    .limit locals 1
+    bipush 1
+    tableswitch default Lother low 0 high 2 { L0 L1 L2 }
+L0:
+    .stack at L0 locals [Ljava/lang/String; stack
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    ldc "zero"
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+    goto Lend
+L1:
+    .stack at L1 locals [Ljava/lang/String; stack
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    ldc "one"
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+    goto Lend
+L2:
+    .stack at L2 locals [Ljava/lang/String; stack
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    ldc "two"
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+    goto Lend
+Lother:
+    .stack at Lother locals [Ljava/lang/String; stack
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    ldc "other"
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+Lend:
+    .stack at Lend locals [Ljava/lang/String; stack
+    return
+.end method

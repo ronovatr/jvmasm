@@ -1,0 +1,34 @@
+; Method that declares .throws
+.class public ThrowsDemo
+.super java/lang/Object
+
+.method public static boom()V
+    .throws java/io/IOException
+    .limit stack 3
+    .limit locals 0
+    new java/io/IOException
+    dup
+    ldc "nope"
+    invokespecial java/io/IOException/<init>(Ljava/lang/String;)V
+    athrow
+.end method
+
+.method public static main([Ljava/lang/String;)V
+    .limit stack 2
+    .limit locals 1
+    .catch java/io/IOException from Ltry to Lend using Lhandler
+Ltry:
+    invokestatic ThrowsDemo/boom()V
+Lend:
+    goto Ldone
+Lhandler:
+    .stack at Lhandler locals [Ljava/lang/String; stack java/io/IOException
+    pop
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    ldc "io"
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+    return
+Ldone:
+    .stack at Ldone locals [Ljava/lang/String; stack
+    return
+.end method

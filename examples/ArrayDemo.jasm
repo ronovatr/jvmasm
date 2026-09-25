@@ -1,0 +1,21 @@
+; Array + wide-ish local use (iload with slot, not shorthand)
+.class public ArrayDemo
+.super java/lang/Object
+
+.method public static main([Ljava/lang/String;)V
+    .limit stack 4
+    .limit locals 2
+    iconst_3
+    newarray int
+    astore_1
+    aload_1
+    iconst_0
+    bipush 7
+    iastore
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    aload_1
+    iconst_0
+    iaload
+    invokevirtual java/io/PrintStream/println(I)V
+    return
+.end method

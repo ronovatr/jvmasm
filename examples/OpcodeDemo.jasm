@@ -1,0 +1,20 @@
+; Preserve exact shorthand opcodes: iload_0 not iload 0
+.class public OpcodeDemo
+.super java/lang/Object
+
+.method public static identity(I)I
+    .limit stack 1
+    .limit locals 1
+    iload_0
+    ireturn
+.end method
+
+.method public static main([Ljava/lang/String;)V
+    .limit stack 2
+    .limit locals 1
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    bipush 9
+    invokestatic OpcodeDemo/identity(I)I
+    invokevirtual java/io/PrintStream/println(I)V
+    return
+.end method

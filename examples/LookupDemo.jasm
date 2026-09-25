@@ -1,0 +1,30 @@
+; lookupswitch demo
+.class public LookupDemo
+.super java/lang/Object
+
+.method public static main([Ljava/lang/String;)V
+    .limit stack 2
+    .limit locals 1
+    bipush 10
+    lookupswitch default Ldef { 5 -> L5, 10 -> L10 }
+L5:
+    .stack at L5 locals [Ljava/lang/String; stack
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    ldc "five"
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+    goto Lend
+L10:
+    .stack at L10 locals [Ljava/lang/String; stack
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    ldc "ten"
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+    goto Lend
+Ldef:
+    .stack at Ldef locals [Ljava/lang/String; stack
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    ldc "def"
+    invokevirtual java/io/PrintStream/println(Ljava/lang/String;)V
+Lend:
+    .stack at Lend locals [Ljava/lang/String; stack
+    return
+.end method

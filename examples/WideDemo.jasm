@@ -1,0 +1,15 @@
+; wide iinc — slot and delta that need the wide prefix
+.class public WideDemo
+.super java/lang/Object
+
+.method public static main([Ljava/lang/String;)V
+    .limit stack 2
+    .limit locals 300
+    bipush 1
+    wide istore 256
+    wide iinc 256 300
+    getstatic java/lang/System/out Ljava/io/PrintStream;
+    wide iload 256
+    invokevirtual java/io/PrintStream/println(I)V
+    return
+.end method

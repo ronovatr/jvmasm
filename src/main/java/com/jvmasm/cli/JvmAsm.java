@@ -1,5 +1,6 @@
 package com.jvmasm.cli;
 
+import com.jvmasm.AssembleOptions;
 import com.jvmasm.Assembler;
 import com.jvmasm.disasm.Disassembler;
 
@@ -11,6 +12,7 @@ import java.nio.file.Path;
  *
  * <pre>
  *   jvmasm assemble HelloWorld.jasm -o HelloWorld.class
+ *   jvmasm assemble Branch.jasm --strict-stack -o Branch.class
  *   jvmasm disassemble HelloWorld.class -o HelloWorld.jasm
  * </pre>
  */
@@ -35,6 +37,8 @@ public final class JvmAsm {
     private static void assemble(String[] args) throws Exception {
         Path input = null;
         Path output = null;
+        boolean strictStack = false;
+        boolean verify = true;
         for (int i = 1; i < args.length; i++) {
             switch (args[i]) {
                 case "-o", "--output" -> {
@@ -43,6 +47,8 @@ public final class JvmAsm {
                     }
                     output = Path.of(args[++i]);
                 }
+                case "--strict-stack" -> strictStack = true;
+                case "--no-verify" -> verify = false;
                 default -> {
                     if (args[i].startsWith("-")) {
                         die("unknown option: " + args[i]);
@@ -63,7 +69,10 @@ public final class JvmAsm {
             String base = dot >= 0 ? name.substring(0, dot) : name;
             output = input.toAbsolutePath().getParent().resolve(base + ".class");
         }
-        new Assembler().assembleFile(input, output);
+        AssembleOptions opts = AssembleOptions.defaults()
+                .withStrictStack(strictStack)
+                .withVerify(verify);
+        new Assembler(opts).assembleFile(input, output);
         System.out.println("wrote " + output.toAbsolutePath());
     }
 
@@ -108,7 +117,7 @@ public final class JvmAsm {
         System.out.println("""
                 jvmasm — historical-mnemonic JVM bytecode assembler
                 Usage:
-                  jvmasm assemble <file.jasm> [-o <file.class>]
+                  jvmasm assemble <file.jasm> [-o <file.class>] [--strict-stack] [--no-verify]
                   jvmasm disassemble <file.class> [-o <file.jasm>]
                 """);
     }
