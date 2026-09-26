@@ -541,7 +541,7 @@ public final class ClassFileEmitter {
     }
 
     private static DirectMethodHandleDesc.Kind mapHandleKind(String kind, int line) {
-        String k = kind.toLowerCase();
+        String k = kind.toLowerCase(java.util.Locale.ROOT);
         return switch (k) {
             case "invokestatic", "static" -> DirectMethodHandleDesc.Kind.STATIC;
             case "invokevirtual", "virtual" -> DirectMethodHandleDesc.Kind.VIRTUAL;
@@ -557,7 +557,7 @@ public final class ClassFileEmitter {
             case "putstatic", "static_setter" -> DirectMethodHandleDesc.Kind.STATIC_SETTER;
             default -> {
                 try {
-                    yield DirectMethodHandleDesc.Kind.valueOf(kind.toUpperCase());
+                    yield DirectMethodHandleDesc.Kind.valueOf(kind.toUpperCase(java.util.Locale.ROOT));
                 } catch (IllegalArgumentException e) {
                     throw new IllegalArgumentException(
                             "unknown method handle kind '" + kind + "' (line " + line + ")");

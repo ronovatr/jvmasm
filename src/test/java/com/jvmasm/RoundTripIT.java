@@ -8,6 +8,7 @@ import java.lang.classfile.Opcode;
 import java.lang.classfile.instruction.LoadInstruction;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -55,6 +56,22 @@ class RoundTripIT {
                 .anyMatch(el -> el instanceof LoadInstruction li && li.opcode() == Opcode.ILOAD_0);
         assertTrue(found);
         assertEquals("9", runMain(again, "OpcodeDemo"));
+    }
+
+    @Test
+    void disassembleUsesRootLocaleMnemonics() throws Exception {
+        Locale previous = Locale.getDefault();
+        Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+        try {
+            byte[] bytes = new Assembler().assemble(Files.readString(Path.of("examples/HelloWorld.jasm")));
+            String text = new Disassembler().disassemble(bytes);
+            assertTrue(text.contains("getstatic"), text);
+            assertTrue(text.contains("invokevirtual"), text);
+            assertTrue(!text.contains("getstatıc") && !text.contains("ınvoke"), text);
+            assertRoundTripFromBytes(bytes, "HelloWorld", "Hello, world");
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 
     private static void assertRoundTripRuns(String jasmPath, String className, String expected)

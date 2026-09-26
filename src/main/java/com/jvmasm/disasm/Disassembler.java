@@ -42,6 +42,7 @@ import java.lang.classfile.instruction.TableSwitchInstruction;
 import java.lang.classfile.instruction.TypeCheckInstruction;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -284,7 +285,7 @@ public final class Disassembler {
             }
             case NewObjectInstruction n -> "new " + n.className().asInternalName();
             case NewReferenceArrayInstruction n -> "anewarray " + n.componentType().asInternalName();
-            case NewPrimitiveArrayInstruction n -> "newarray " + n.typeKind().name().toLowerCase();
+            case NewPrimitiveArrayInstruction n -> "newarray " + n.typeKind().name().toLowerCase(Locale.ROOT);
             case NewMultiArrayInstruction n ->
                     "multianewarray " + n.arrayType().asInternalName() + " " + n.dimensions();
             case TypeCheckInstruction t -> mnem + " " + t.type().asInternalName();
@@ -316,7 +317,7 @@ public final class Disassembler {
                 || op == Opcode.DLOAD_W || op == Opcode.ALOAD_W
                 || op == Opcode.ISTORE_W || op == Opcode.LSTORE_W || op == Opcode.FSTORE_W
                 || op == Opcode.DSTORE_W || op == Opcode.ASTORE_W) {
-            String bare = op.name().toLowerCase().replace("_w", "");
+            String bare = op.name().toLowerCase(Locale.ROOT).replace("_w", "");
             return "wide " + bare + " " + slot;
         }
         return mnem + " " + slot;
@@ -363,7 +364,7 @@ public final class Disassembler {
     }
 
     private static String mnemonicFor(Opcode op) {
-        String name = op.name().toLowerCase();
+        String name = op.name().toLowerCase(Locale.ROOT);
         if (InstructionDef.lookup(name).isPresent()) {
             return name;
         }

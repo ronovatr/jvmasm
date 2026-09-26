@@ -15,7 +15,7 @@ class InstructionDefTest {
         Set<String> seen = new HashSet<>();
         for (InstructionDef def : InstructionDef.values()) {
             assertTrue(seen.add(def.mnemonic()), "duplicate mnemonic: " + def.mnemonic());
-            assertEquals(def.mnemonic(), def.mnemonic().toLowerCase(), def.mnemonic());
+            assertEquals(def.mnemonic(), def.mnemonic().toLowerCase(java.util.Locale.ROOT), def.mnemonic());
             def.assertOpcodeNameAligned();
         }
     }
