@@ -19,7 +19,7 @@ The deliverable is a **compiler (assembler)** that turns `.jasm` source files in
 - Mnemonics are **exactly** the strings used in the JVM Specification's instruction set chapter — no renaming, no expansion into English words, no abbreviation-of-abbreviations. `iload_0` is spelled `iload_0`, not `load_local_int_0`.
 - **Zero auto-selection.** The assembler never chooses between `iload`/`iload_0`, `bipush`/`sipush`/`ldc`, `goto`/`goto_w`, narrow vs. `wide` forms, or any other historically distinct encoding on the author's behalf. If two real opcodes exist, the language has two real mnemonics, and the author picks.
 - Explicit, low-level control: local variable slots, stack depth, constant pool entries, branch targets, exception handlers, and stack map frames are all things the language exposes directly, addressed by raw index/number, never by inferred name or alias.
-- Deterministic, well-specified grammar (a person or an LLM should be able to generate valid programs mechanically from the spec below).
+- Deterministic, well-specified grammar (valid programs can be generated mechanically from the spec below).
 - Round-trippable: assemble → disassemble → reassemble should be stable, and should reproduce the *same* mnemonic the original bytecode used (a disassembler that turns `iload_0` back into `iload 0` is a round-trip failure under this design, since it silently discards which real opcode was present).
 - Runs on the standard JVM: output `.class` files load and execute in any compliant JVM (verified with `java`, `javap -v`, and `-Xverify:all` initially, later with a bytecode verifier library).
 
@@ -33,7 +33,7 @@ The deliverable is a **compiler (assembler)** that turns `.jasm` source files in
 
 ## 2. Prior Art to Study Before/While Building
 
-Read (or have the assistant read) these before generating code, since the JVM class file format and instruction set are exactly and only defined here:
+Read these before generating code, since the JVM class file format and instruction set are exactly and only defined here:
 - *The Java Virtual Machine Specification*, chapter 4 (class file format) and chapter 6 (instruction set) — the canonical, authoritative source for every opcode's exact mnemonic spelling, operand encoding, and verification rule. Mnemonic spellings in this project must match chapter 6 character-for-character.
 - Jasmin syntax (existing "assembler for the JVM") — the closest prior art: it already uses historical mnemonics verbatim and a similar directive style (`.class`, `.method`, `.limit stack`). Useful as a structural reference for directives; this project's instruction-level fidelity should meet or exceed it (Jasmin does auto-select some encodings, e.g. picking `ldc` vs `ldc_w` automatically — this project should not).
 - Krakatau assembler/disassembler — useful prior art for round-trip design and for handling stack map frames explicitly in text form.
