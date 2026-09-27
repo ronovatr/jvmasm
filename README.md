@@ -19,13 +19,13 @@ See `jvm-word-assembler-dev-plan.md` for the full design.
 ## Assemble / disassemble
 
 ```bash
-./gradlew run --args="assemble examples/HelloWorld.jasm -o out/HelloWorld.class"
-java -cp out HelloWorld
+java -jar jvmasm.jar assemble HelloWorld.jasm
+java HelloWorld
 
-./gradlew run --args="disassemble out/HelloWorld.class"
+java -jar jvmasm.jar disassemble out/HelloWorld.class
 
 # Require explicit .stack at every branch/handler target:
-./gradlew run --args="assemble examples/StackBranchDemo.jasm --strict-stack -o out/StackBranchDemo.class"
+java -jar jvmasm.jar assemble examples/StackBranchDemo.jasm --strict-stack -o StackBranchDemo.class
 ```
 
 ## Examples
