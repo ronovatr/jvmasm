@@ -6,6 +6,7 @@ import java.util.Set;
 
 /** Access-flag keyword → bitmask helpers (JVMS 4.1 / 4.5 / 4.6). */
 public final class AccessFlags {
+
     private AccessFlags() {}
 
     public static int parse(Set<String> keywords, Kind kind) {
@@ -31,16 +32,22 @@ public final class AccessFlags {
                 case "enum" -> ClassFile.ACC_ENUM;
                 case "module" -> ClassFile.ACC_MODULE;
                 case "transient" -> ClassFile.ACC_TRANSIENT;
-                case "open", "mandated" -> throw new IllegalArgumentException(
-                        "access flag '" + kw + "' not applicable to " + kind);
+                case "open", "mandated" -> throw new IllegalArgumentException("access flag '" + kw + "' not applicable to " + kind);
                 default -> throw new IllegalArgumentException("unknown access flag '" + kw + "'");
             };
         }
+
         if (kind == Kind.CLASS && (flags & ClassFile.ACC_INTERFACE) == 0) {
             flags |= ClassFile.ACC_SUPER; // historical default for classes
         }
+
         return flags;
     }
 
-    public enum Kind { CLASS, FIELD, METHOD }
+    public enum Kind {
+        CLASS,
+        FIELD,
+        METHOD
+    }
+
 }

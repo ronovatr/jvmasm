@@ -340,4 +340,5 @@ public enum InstructionDef {
             throw new AssertionError("mnemonic/opcode mismatch: " + mnemonic + " vs " + opcode.name());
         }
     }
+
 }

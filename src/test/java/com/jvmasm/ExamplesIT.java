@@ -2,6 +2,8 @@ package com.jvmasm;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.Opcode;
 import java.lang.classfile.instruction.LoadInstruction;
@@ -90,12 +92,12 @@ class ExamplesIT {
 
     private static String runMain(String jasmPath, String className) throws Exception {
         byte[] bytes = new Assembler().assemble(Files.readString(Path.of(jasmPath)));
-        var loader = new ByteClassLoader(className, bytes);
+		ByteClassLoader loader = new ByteClassLoader(className, bytes);
         Class<?> cls = loader.loadClass(className);
         Method main = cls.getMethod("main", String[].class);
-        var buf = new java.io.ByteArrayOutputStream();
-        var prev = System.out;
-        System.setOut(new java.io.PrintStream(buf));
+		ByteArrayOutputStream buf = new ByteArrayOutputStream();
+		PrintStream prev = System.out;
+        System.setOut(new PrintStream(buf));
         try {
             main.invoke(null, (Object) new String[0]);
         } finally {
@@ -122,4 +124,5 @@ class ExamplesIT {
             return defineClass(n, bytes, 0, bytes.length);
         }
     }
+
 }

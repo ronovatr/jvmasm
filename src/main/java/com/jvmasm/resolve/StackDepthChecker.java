@@ -182,11 +182,6 @@ public final class StackDepthChecker {
         }
         // Drop trailing empty unlabeled blocks
         blocks.removeIf(b -> b.items.isEmpty() && b.label == null && b != blocks.getFirst());
-        // Relink fall-through for remaining
-        Map<Block, Integer> index = new HashMap<>();
-        for (int i = 0; i < blocks.size(); i++) {
-            index.put(blocks.get(i), i);
-        }
         return blocks;
     }
 
@@ -214,49 +209,34 @@ public final class StackDepthChecker {
     private static int apply(int depth, InsnItem insn) {
         InstructionDef def = insn.def();
         int delta = switch (def) {
-            case NOP, IINC -> 0;
-            case ACONST_NULL, ICONST_M1, ICONST_0, ICONST_1, ICONST_2, ICONST_3, ICONST_4, ICONST_5,
-                 FCONST_0, FCONST_1, FCONST_2, BIPUSH, SIPUSH, LDC, LDC_W,
-                 ILOAD, ILOAD_0, ILOAD_1, ILOAD_2, ILOAD_3,
-                 FLOAD, FLOAD_0, FLOAD_1, FLOAD_2, FLOAD_3,
-                 ALOAD, ALOAD_0, ALOAD_1, ALOAD_2, ALOAD_3 -> +1;
+			case ACONST_NULL, ICONST_M1, ICONST_0, ICONST_1, ICONST_2, ICONST_3, ICONST_4, ICONST_5,
+				 FCONST_0, FCONST_1, FCONST_2, BIPUSH, SIPUSH, LDC, LDC_W,
+				 ILOAD, ILOAD_0, ILOAD_1, ILOAD_2, ILOAD_3,
+				 FLOAD, FLOAD_0, FLOAD_1, FLOAD_2, FLOAD_3,
+				 ALOAD, ALOAD_0, ALOAD_1, ALOAD_2, ALOAD_3, DUP, NEW -> +1;
             case LCONST_0, LCONST_1, DCONST_0, DCONST_1, LDC2_W,
-                 LLOAD, LLOAD_0, LLOAD_1, LLOAD_2, LLOAD_3,
-                 DLOAD, DLOAD_0, DLOAD_1, DLOAD_2, DLOAD_3 -> +2;
+				 LLOAD, LLOAD_0, LLOAD_1, LLOAD_2, LLOAD_3,
+				 DLOAD, DLOAD_0, DLOAD_1, DLOAD_2, DLOAD_3, DUP2 -> +2;
             case POP, ISTORE, ISTORE_0, ISTORE_1, ISTORE_2, ISTORE_3,
-                 FSTORE, FSTORE_0, FSTORE_1, FSTORE_2, FSTORE_3,
-                 ASTORE, ASTORE_0, ASTORE_1, ASTORE_2, ASTORE_3,
-                 IRETURN, FRETURN, ARETURN,
-                 IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE, IFNULL, IFNONNULL -> -1;
+				 FSTORE, FSTORE_0, FSTORE_1, FSTORE_2, FSTORE_3,
+				 ASTORE, ASTORE_0, ASTORE_1, ASTORE_2, ASTORE_3,
+				 IRETURN, FRETURN, ARETURN,
+				 IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE, IFNULL, IFNONNULL, IADD, ISUB, IMUL, IDIV, IREM, IAND, IOR, IXOR,
+				 ISHL, ISHR, IUSHR, FADD, FSUB, FMUL, FDIV, FREM, LSHL, LSHR, LUSHR, ATHROW, IALOAD, FALOAD, AALOAD,
+                 BALOAD, CALOAD, SALOAD -> -1;
             case POP2, LSTORE, LSTORE_0, LSTORE_1, LSTORE_2, LSTORE_3,
-                 DSTORE, DSTORE_0, DSTORE_1, DSTORE_2, DSTORE_3,
-                 LRETURN, DRETURN -> -2;
-            case DUP -> +1;
-            case DUP2 -> +2;
-            case SWAP -> 0;
-            case IADD, ISUB, IMUL, IDIV, IREM, IAND, IOR, IXOR, ISHL, ISHR, IUSHR,
-                 FADD, FSUB, FMUL, FDIV, FREM -> -1;
-            case LADD, LSUB, LMUL, LDIV, LREM, LAND, LOR, LXOR,
-                 DADD, DSUB, DMUL, DDIV, DREM -> -2;
-            case LSHL, LSHR, LUSHR -> -1;
-            case INEG, LNEG, FNEG, DNEG, ARRAYLENGTH -> 0;
-            case GETSTATIC -> fieldPush(insn);
+				 DSTORE, DSTORE_0, DSTORE_1, DSTORE_2, DSTORE_3,
+				 LRETURN, DRETURN, LADD, LSUB, LMUL, LDIV, LREM, LAND, LOR, LXOR, DADD, DSUB, DMUL, DDIV, DREM,
+                 IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE, IF_ACMPEQ, IF_ACMPNE -> -2;
+			case GETSTATIC -> fieldPush(insn);
             case PUTSTATIC -> -fieldPush(insn);
             case GETFIELD -> fieldPush(insn) - 1;
             case PUTFIELD -> -(1 + fieldPush(insn));
             case INVOKEVIRTUAL, INVOKESPECIAL, INVOKEINTERFACE -> invokeDelta(insn, true);
             case INVOKESTATIC -> invokeDelta(insn, false);
             case INVOKEDYNAMIC -> invokeDynamicDelta(insn);
-            case NEW -> +1;
-            case ANEWARRAY, NEWARRAY -> 0; // pop count, push array ref
-            case ATHROW -> -1;
-            case RETURN -> 0;
-            case GOTO, GOTO_W, JSR, JSR_W -> 0;
-            case IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE,
-                 IF_ACMPEQ, IF_ACMPNE -> -2;
-            case IALOAD, FALOAD, AALOAD, BALOAD, CALOAD, SALOAD -> -1;
-            case LALOAD, DALOAD -> 0;
-            case IASTORE, FASTORE, AASTORE, BASTORE, CASTORE, SASTORE -> -3;
+			case ANEWARRAY, NEWARRAY -> 0; // pop count, push array ref
+			case IASTORE, FASTORE, AASTORE, BASTORE, CASTORE, SASTORE -> -3;
             case LASTORE, DASTORE -> -4;
             default -> 0;
         };
@@ -353,4 +333,5 @@ public final class StackDepthChecker {
             this.label = label;
         }
     }
+
 }

@@ -13,6 +13,7 @@ import java.nio.file.Path;
 
 /** Front-door: .jasm source → .class bytes. */
 public final class Assembler {
+
     private final AssembleOptions options;
     private final ClassFileEmitter emitter;
     private final StackDepthChecker stackChecker = new StackDepthChecker();
@@ -50,4 +51,5 @@ public final class Assembler {
         }
         Files.write(output, bytes);
     }
+
 }

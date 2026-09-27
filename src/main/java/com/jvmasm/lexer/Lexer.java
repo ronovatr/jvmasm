@@ -258,4 +258,5 @@ public final class Lexer {
     private static boolean isHex(char c) {
         return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
     }
+
 }

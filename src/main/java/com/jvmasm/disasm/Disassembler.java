@@ -12,9 +12,7 @@ import java.lang.classfile.Label;
 import java.lang.classfile.MethodModel;
 import java.lang.classfile.Opcode;
 import java.lang.classfile.attribute.CodeAttribute;
-import java.lang.classfile.attribute.ConstantValueAttribute;
 import java.lang.classfile.attribute.StackMapFrameInfo;
-import java.lang.classfile.attribute.StackMapTableAttribute;
 import java.lang.classfile.instruction.ArrayLoadInstruction;
 import java.lang.classfile.instruction.ArrayStoreInstruction;
 import java.lang.classfile.instruction.BranchInstruction;
@@ -41,7 +39,6 @@ import java.lang.classfile.instruction.StoreInstruction;
 import java.lang.classfile.instruction.TableSwitchInstruction;
 import java.lang.classfile.instruction.TypeCheckInstruction;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -146,7 +143,7 @@ public final class Disassembler {
         java.util.concurrent.atomic.AtomicInteger labelCounter =
                 new java.util.concurrent.atomic.AtomicInteger();
         java.util.function.Function<Label, String> nameLabel =
-                l -> "L" + labelCounter.getAndIncrement();
+                _ -> "L" + labelCounter.getAndIncrement();
 
         for (CodeElement el : code) {
             if (el instanceof BranchInstruction br) {
@@ -248,8 +245,7 @@ public final class Disassembler {
                     o.className().asInternalName();
             case StackMapFrameInfo.UninitializedVerificationTypeInfo u ->
                     "uninitialized " + labels.get(u.newTarget());
-            default -> t.toString();
-        };
+		};
     }
 
     private String formatInstruction(
@@ -365,10 +361,8 @@ public final class Disassembler {
 
     private static String mnemonicFor(Opcode op) {
         String name = op.name().toLowerCase(Locale.ROOT);
-        if (InstructionDef.lookup(name).isPresent()) {
-            return name;
-        }
-        return name;
+		InstructionDef.lookup(name);
+		return name;
     }
 
     private static void appendFlags(StringBuilder out, int flags, boolean isClass) {
@@ -424,4 +418,5 @@ public final class Disassembler {
     private static String escape(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t");
     }
+
 }

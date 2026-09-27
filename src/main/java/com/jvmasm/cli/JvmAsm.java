@@ -17,7 +17,8 @@ import java.nio.file.Path;
  * </pre>
  */
 public final class JvmAsm {
-    public static void main(String[] args) throws Exception {
+
+    static void main(String[] args) throws Exception {
         if (args.length == 0) {
             usage();
             System.exit(2);
@@ -126,4 +127,5 @@ public final class JvmAsm {
         System.err.println(msg);
         System.exit(2);
     }
+
 }

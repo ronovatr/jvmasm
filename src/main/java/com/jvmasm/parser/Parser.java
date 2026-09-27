@@ -22,6 +22,7 @@ import java.util.Set;
  * plus a Phase-1 opcode subset. Additional directives/opcodes are rejected clearly.
  */
 public final class Parser {
+
     private final List<Token> tokens;
     private int i;
 
@@ -482,4 +483,5 @@ public final class Parser {
         Token t = peek();
         return new ParseException(msg, t.line(), t.column());
     }
+
 }

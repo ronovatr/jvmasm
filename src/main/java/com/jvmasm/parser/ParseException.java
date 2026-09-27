@@ -1,6 +1,7 @@
 package com.jvmasm.parser;
 
 public class ParseException extends RuntimeException {
+
     private final int line;
     private final int column;
 
@@ -17,4 +18,5 @@ public class ParseException extends RuntimeException {
     public int column() {
         return column;
     }
+
 }

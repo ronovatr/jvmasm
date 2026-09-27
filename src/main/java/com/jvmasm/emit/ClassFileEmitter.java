@@ -17,10 +17,7 @@ import com.jvmasm.ast.TableSwitchItem;
 import com.jvmasm.ast.VarItem;
 import com.jvmasm.isa.InstructionDef;
 
-import java.lang.classfile.ClassFile;
-import java.lang.classfile.CodeBuilder;
-import java.lang.classfile.Label;
-import java.lang.classfile.Opcode;
+import java.lang.classfile.*;
 import java.lang.classfile.attribute.ConstantValueAttribute;
 import java.lang.classfile.attribute.ExceptionsAttribute;
 import java.lang.classfile.attribute.SourceFileAttribute;
@@ -122,7 +119,7 @@ public final class ClassFileEmitter {
             }
 
             Map<String, BootstrapDecl> bootstraps = cls.bootstraps.stream()
-                    .collect(Collectors.toMap(BootstrapDecl::name, b -> b, (a, b) -> {
+                    .collect(Collectors.toMap(BootstrapDecl::name, b -> b, (a, _) -> {
                         throw new IllegalArgumentException("duplicate bootstrap '" + a.name() + "'");
                     }));
 
@@ -404,10 +401,7 @@ public final class ClassFileEmitter {
                 throw new IllegalArgumentException(
                         "ldc constant pool index " + index + " exceeds u1; use ldc_w (line " + insn.line() + ")");
             }
-            if (op == Opcode.LDC2_W) {
-                throw new IllegalArgumentException("ldc2_w is only for long/double (line " + insn.line() + ")");
-            }
-        }
+		}
         if (op == Opcode.LDC2_W) {
             ConstantDesc v = entry.constantValue();
             if (!(v instanceof Long || v instanceof Double)) {
@@ -420,8 +414,8 @@ public final class ClassFileEmitter {
     private LoadableConstantEntry resolveConstant(CodeBuilder cb, String operand, InsnItem insn) {
         // String literal was already unquoted by lexer into operand text for STRING tokens;
         // numeric / class forms:
-        if (operand.startsWith("0x") || operand.startsWith("0X")
-                || (operand.length() > 0 && (Character.isDigit(operand.charAt(0)) || operand.charAt(0) == '-'))) {
+        if (operand.startsWith("0x") || operand.startsWith("0X") || (!operand.isEmpty()
+                && (Character.isDigit(operand.charAt(0)) || operand.charAt(0) == '-'))) {
             if (operand.endsWith("L") || operand.endsWith("l")) {
                 return cb.constantPool().longEntry(Long.parseLong(stripSuffix(operand, 1)));
             }
@@ -489,7 +483,7 @@ public final class ClassFileEmitter {
         String desc;
         String bsmName;
         if (ops.size() == 2) {
-            String nameDesc = ops.get(0);
+            String nameDesc = ops.getFirst();
             int paren = nameDesc.indexOf('(');
             if (paren < 0) {
                 throw new IllegalArgumentException(
@@ -568,7 +562,7 @@ public final class ClassFileEmitter {
 
     private static ConstantDesc parseBootstrapArg(String text) {
         if (text.startsWith("0x") || text.startsWith("0X")
-                || (text.length() > 0 && (Character.isDigit(text.charAt(0)) || text.charAt(0) == '-'))) {
+                || (!text.isEmpty() && (Character.isDigit(text.charAt(0)) || text.charAt(0) == '-'))) {
             if (text.endsWith("L") || text.endsWith("l")) {
                 return Long.parseLong(text.substring(0, text.length() - 1));
             }
@@ -775,7 +769,7 @@ public final class ClassFileEmitter {
                     .filter(m -> m.methodName().equalsString(method.name)
                             && m.methodType().equalsString(method.descriptor))
                     .findFirst()
-                    .flatMap(m -> m.code())
+                    .flatMap(MethodModel::code)
                     .ifPresent(code -> {
                         if (!(code instanceof java.lang.classfile.attribute.CodeAttribute ca)) {
                             return;
@@ -795,4 +789,5 @@ public final class ClassFileEmitter {
                     });
         }
     }
+
 }

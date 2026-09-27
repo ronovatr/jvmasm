@@ -3,6 +3,8 @@ package com.jvmasm;
 import com.jvmasm.disasm.Disassembler;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.Opcode;
 import java.lang.classfile.instruction.LoadInstruction;
@@ -81,8 +83,7 @@ class RoundTripIT {
         assertRoundTripFromBytes(original, className, expected);
     }
 
-    private static void assertRoundTripFromBytes(byte[] original, String className, String expected)
-            throws Exception {
+    private static void assertRoundTripFromBytes(byte[] original, String className, String expected) throws Exception {
         String disassembled = new Disassembler().disassemble(original);
         assertTrue(disassembled.contains("invokevirtual") || disassembled.contains("invokedynamic")
                 || disassembled.contains("return"));
@@ -91,12 +92,12 @@ class RoundTripIT {
     }
 
     private static String runMain(byte[] bytes, String className) throws Exception {
-        Class<?> cls = new ByteLoader(className, bytes).loadClass(className);
-        var buf = new java.io.ByteArrayOutputStream();
+        Class<?> clazz = new ByteLoader(className, bytes).loadClass(className);
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
         var prev = System.out;
-        System.setOut(new java.io.PrintStream(buf));
+        System.setOut(new PrintStream(buf));
         try {
-            cls.getMethod("main", String[].class).invoke(null, (Object) new String[0]);
+            clazz.getMethod("main", String[].class).invoke(null, (Object) new String[0]);
         } finally {
             System.setOut(prev);
         }
@@ -121,4 +122,5 @@ class RoundTripIT {
             return defineClass(n, bytes, 0, bytes.length);
         }
     }
+
 }

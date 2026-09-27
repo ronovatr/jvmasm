@@ -1,14 +1,6 @@
 package com.jvmasm.resolve;
 
-import com.jvmasm.ast.CatchEntry;
-import com.jvmasm.ast.ClassDecl;
-import com.jvmasm.ast.CodeItem;
-import com.jvmasm.ast.InsnItem;
-import com.jvmasm.ast.LabelItem;
-import com.jvmasm.ast.LookupSwitchItem;
-import com.jvmasm.ast.MethodDecl;
-import com.jvmasm.ast.StackFrameItem;
-import com.jvmasm.ast.TableSwitchItem;
+import com.jvmasm.ast.*;
 import com.jvmasm.isa.InstructionDef;
 import com.jvmasm.isa.OperandShape;
 
@@ -21,11 +13,11 @@ import java.util.Set;
  */
 public final class StrictStackValidator {
 
-    public void check(ClassDecl cls) {
-        if (cls.majorVersion < 50) {
+    public void check(ClassDecl classDecl) {
+        if (classDecl.majorVersion < 50) {
             return;
         }
-        for (MethodDecl method : cls.methods) {
+        for (MethodDecl method : classDecl.methods) {
             checkMethod(method);
         }
     }
@@ -36,40 +28,37 @@ public final class StrictStackValidator {
 
         for (CodeItem item : method.code) {
             switch (item) {
-                case StackFrameItem sf -> frames.add(sf.label());
+                case StackFrameItem stackFrame -> frames.add(stackFrame.label());
                 case InsnItem insn -> {
-                    if (insn.def().shape() == OperandShape.BRANCH
-                            || insn.def().shape() == OperandShape.BRANCH_W) {
+                    if (insn.def().shape() == OperandShape.BRANCH || insn.def().shape() == OperandShape.BRANCH_W) {
                         targets.add(insn.operands().getFirst());
                     }
                     if (insn.def() == InstructionDef.JSR || insn.def() == InstructionDef.JSR_W) {
                         targets.add(insn.operands().getFirst());
                     }
                 }
-                case TableSwitchItem ts -> {
-                    targets.add(ts.defaultLabel());
-                    targets.addAll(ts.caseLabels());
+                case TableSwitchItem tableSwitch -> {
+                    targets.add(tableSwitch.defaultLabel());
+                    targets.addAll(tableSwitch.caseLabels());
                 }
-                case LookupSwitchItem ls -> {
-                    targets.add(ls.defaultLabel());
-                    for (var c : ls.cases()) {
-                        targets.add(c.label());
+                case LookupSwitchItem lookupSwitch -> {
+                    targets.add(lookupSwitch.defaultLabel());
+                    for (LookupCase lookupCase : lookupSwitch.cases()) {
+                        targets.add(lookupCase.label());
                     }
                 }
-                case LabelItem ignored -> { }
-                default -> { }
+				default -> { }
             }
         }
-        for (CatchEntry c : method.catches) {
-            targets.add(c.handler());
+        for (CatchEntry entry : method.catches) {
+            targets.add(entry.handler());
         }
 
-        for (String t : targets) {
-            if (!frames.contains(t)) {
-                throw new IllegalArgumentException(
-                        "strict stack: missing .stack for branch/handler target '"
-                                + t + "' in method " + method.name);
+        for (String target : targets) {
+            if (!frames.contains(target)) {
+                throw new IllegalArgumentException("strict stack: missing .stack for branch/handler target '" + target + "' in method " + method.name);
             }
         }
     }
+
 }

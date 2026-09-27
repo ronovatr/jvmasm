@@ -27,4 +27,5 @@ class InstructionDefTest {
         assertEquals(InstructionDef.LDC_W, InstructionDef.lookup("ldc_w").orElseThrow());
         assertTrue(InstructionDef.lookup("load_local_int_0").isEmpty());
     }
+
 }

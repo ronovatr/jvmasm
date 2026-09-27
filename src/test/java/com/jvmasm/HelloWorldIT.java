@@ -4,9 +4,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -29,7 +29,7 @@ class HelloWorldIT {
         Path classFile = tmp.resolve("HelloWorld.class");
         Files.write(classFile, bytes);
 
-        var loader = new java.net.URLClassLoader(new java.net.URL[]{tmp.toUri().toURL()}, null);
+		URLClassLoader loader = new URLClassLoader(new java.net.URL[]{tmp.toUri().toURL()}, null);
         Class<?> cls = loader.loadClass("HelloWorld");
         Method main = cls.getMethod("main", String[].class);
 

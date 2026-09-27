@@ -17,4 +17,5 @@ public class LexException extends RuntimeException {
     public int column() {
         return column;
     }
+
 }

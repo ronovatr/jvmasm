@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "com.jvmasm"
-version = "0.1.0-SNAPSHOT"
+version = "1.0.0"
 
 java {
     toolchain {
@@ -28,6 +28,12 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.jar {
+    manifest {
+        attributes["Main-Class"] = application.mainClass.get()
+    }
 }
 
 tasks.named<JavaExec>("run") {
